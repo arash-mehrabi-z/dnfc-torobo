@@ -1,0 +1,12 @@
+*.zip
+*.npy
+*.np
+*.pyc
+*.avi
+*.vscode/*
+feedback_controller/fbc/neural_network/.venv/*
+feedback_controller/fbc/neural_network/data/*
+feedback_controller/fbc/neural_network/weights/*
+feedback_controller/fbc/neural_network/results/*
+feedback_controller/fbc/neural_network/.ipynb_checkpoints/*
+
