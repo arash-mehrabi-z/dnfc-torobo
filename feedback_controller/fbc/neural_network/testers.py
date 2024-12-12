@@ -6,22 +6,43 @@ from nn_models import GeneralModel, MLPBaseline
 import torch.nn as nn
 import math
 import os
+from config import Config
 
 
 class Tester():
     def __init__(self) -> None:
-        self.joint_size = 7
-        self.state_size = 2 * self.joint_size
-        self.step_size = 1
-        self.target_size = 9
-        self.onehot_size = 4
+        self.config = Config()
+
+        self.joint_size = self.config.joints_num
+        self.state_size = self.config.state_dim
+        self.step_size = self.config.step_dim
+        self.target_size = self.config.target_dim
+        self.onehot_size = self.config.onehot_dim
+        
+        self.cur_file_dir_path = os.path.dirname(__file__)
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-        self.cur_file_dir_path = os.path.dirname(__file__)
-        dnfc_adr = 'weights/trajs:360_blocks:3_triangle|mse_los|tar_cart|v_init|7.541K_params' + \
-            '/train_no_0/fbc_675.pth'
-        base_adr = 'weights/trajs:2000_blocks:3_triangle|mse_los|tar_cart|base|v_init|7.431K_params' + \
-            '/train_no_0/fbc_675.pth'
+        self.load_model(train_no=0, epoch_no=0)
+        
+        dataset_path = os.path.join(self.cur_file_dir_path, 
+                                    f'data/torobo/{self.config.dataset_name}/train_ds.npy')
+        self.dataset = np.load(dataset_path, allow_pickle=True, encoding='latin1')
+        print("Tester loaded dataset with shape:", self.dataset.shape)
+
+        self.kin = TorKin()
+        self.criterion = nn.L1Loss()
+        self.criterion_mse = nn.MSELoss(reduction='sum')
+
+    def load_model(self, train_no, epoch_no):
+        model_name_dnfc = self.config.get_model_name(False, False)
+        model_name_dnfc = self.config.add_params_to_name(model_name_dnfc, False)
+        model_name_base = self.config.get_model_name(True, False)
+        model_name_base = self.config.add_params_to_name(model_name_base, True)
+
+        dnfc_adr = f'weights/{self.config.dataset_name}|{model_name_dnfc}' + \
+            f'/train_no_{train_no}/fbc_{epoch_no}.pth'
+        base_adr = f'weights/{self.config.dataset_name}|{model_name_base}' + \
+            f'/train_no_{train_no}/fbc_{epoch_no}.pth'
 
         self.model = GeneralModel(self.state_size, self.target_size+self.onehot_size, 
                                   self.joint_size, use_image=False)
@@ -32,23 +53,15 @@ class Tester():
 
         dnfc_path = os.path.join(self.cur_file_dir_path, dnfc_adr)
         base_path = os.path.join(self.cur_file_dir_path, base_adr)
-        # self.model.load_state_dict(torch.load(dnfc_path, 
-        #                                       map_location=torch.device(self.device)))
-        # self.baseline.load_state_dict(torch.load(base_path, 
-        #                                          map_location=torch.device(self.device)))
-        
-        dataset_path = os.path.join(self.cur_file_dir_path, 
-                                    'data/torobo/trajs:360_blocks:3_triangle/train_ds.npy')
-        self.dataset = np.load(dataset_path, allow_pickle=True, encoding='latin1')
-        print("Tester loaded dataset with shape:", self.dataset.shape)
-
-        self.kin = TorKin()
-        self.criterion = nn.L1Loss()
-        self.criterion_mse = nn.MSELoss(reduction='sum')
+        self.model.load_state_dict(torch.load(dnfc_path, 
+                                              map_location=torch.device(self.device)))
+        self.baseline.load_state_dict(torch.load(base_path, 
+                                                 map_location=torch.device(self.device)))
+        print("Loaded model weights from", dnfc_path)
+        print("Loaded baseline weights from", base_path)
 
 
     def get_delta_ang_offline(self,usebaseline,num):
-
         y1,y2,y3,y4,y5,y6,y7=[],[],[],[],[],[],[]
         elem=self.dataset[num]
 
@@ -56,7 +69,6 @@ class Tester():
             self.baseline.eval()
         else:
             self.model.eval()
-
 
         for i in range(299):
             input_tensor=torch.tensor(elem[i][self.step_size:self.step_size+self.state_size].tolist())

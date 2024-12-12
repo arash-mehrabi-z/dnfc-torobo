@@ -2,6 +2,7 @@ import torch
 import rospy
 from nn_models import GeneralModel, MLPBaseline
 from std_msgs.msg import String
+from config import Config
 import socket
 import time
 import numpy as np
@@ -14,54 +15,30 @@ from udp_comm import Comm
 import os
 import random
 import csv
+import pickle
 
 plt.switch_backend('agg')
 
 comm = Comm()
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 cur_file_dir_path = os.path.dirname(__file__)
+config = Config()
 
-def online_test(use_baseline, dataset, traj_num, 
-                num_params, num_params_base, epoch_num):
-    joint_size = 7
-    state_size = 2 * joint_size
-    step_size = 1
-    target_size = 9
-    onehot_size = 4
+def online_test(tester:Tester, eps_num, use_baseline):
+    joint_size = tester.joint_size
+    state_size = tester.state_size
+    step_size = tester.step_size
+    target_size = tester.target_size
+    onehot_size = tester.onehot_size
     traj_step_size = 900
 
-    dnfc_adr = f'weights/trajs:360_blocks:3_triangle|mse_los|tar_cart|v_init|{num_params}K_params' + \
-        f'/train_no_0/fbc_{epoch_num}.pth'
-    base_adr = f'weights/trajs:360_blocks:3_triangle|mse_los|tar_cart|base|v_init|{num_params_base}K_params' + \
-        f'/train_no_0/fbc_{epoch_num}.pth'
-
-    model = GeneralModel(state_size, (target_size+onehot_size),
-                                 joint_size, use_image=False)
-    baseline = MLPBaseline(state_size+(target_size+onehot_size), 
-                           joint_size)
-    m = model.to(device)
-    m = baseline.to(device)
-    
-    if use_baseline:
-        base_path = os.path.join(cur_file_dir_path, base_adr)
-        baseline.load_state_dict(torch.load(base_path, 
-                                         map_location=torch.device(device)))
-        baseline.eval()
-
-    else:
-        dnfc_path = os.path.join(cur_file_dir_path, dnfc_adr)
-        model.load_state_dict(torch.load(dnfc_path, 
-                                         map_location=torch.device(device)))
-        model.eval()
-
-    point_loss = 0
-    elem = dataset[traj_num]
+    elem = tester.dataset[eps_num]
     state = torch.tensor(elem[0][step_size : 
                                  step_size + state_size].tolist()
                                  ).to(device)
     
-    milestones = t.get_changes_indexes(traj_num)
-    print(milestones)
+    milestones = tester.get_changes_indexes(eps_num)
+    print("milestones", milestones)
     one_hot = elem[0][step_size+state_size+target_size : 
                       step_size+state_size+target_size+onehot_size].tolist()
     goal = elem[0][step_size+state_size : 
@@ -86,11 +63,12 @@ def online_test(use_baseline, dataset, traj_num,
     comm.create_and_pub_msg(state[:7])
     rospy.sleep(5)
 
-    path_point = 0
-    all_joints = []
-    loss = 0
-    criterion = nn.L1Loss()
+    # all_trajs_point = 0
+    traj_point = 0
 
+    all_joints = []
+    latent_reps = []
+    all_states = []
     for i in range(traj_step_size):
         comm.which('\n dnfc in on step'+str(i)+'\n')
 
@@ -100,9 +78,11 @@ def online_test(use_baseline, dataset, traj_num,
         # delta = torch.tensor(elem[i][step_size + state_size + target_size + onehot_size: step_size + state_size + target_size + onehot_size + joint_size ].tolist())
         if use_baseline:
             basel_input = torch.cat((goal_nn, state_nn), dim=1)
-            velocities_tensor = baseline(basel_input)
+            velocities_tensor = tester.baseline(basel_input)
         else:
-            velocities_tensor, x_des, _ = model(goal_nn, state_nn)
+            velocities_tensor, x_des, _ = tester.model(goal_nn, state_nn)
+            x_des = torch.squeeze(x_des, 0)
+            latent_reps.append(x_des.tolist())
 
         velocities_tensor = torch.squeeze(velocities_tensor, 0)
         state[:7] += (5*velocities_tensor)
@@ -113,11 +93,13 @@ def online_test(use_baseline, dataset, traj_num,
         js = torch.tensor((list(comm.joint_state))).to(device)
         comm.jsLock.release()
 
+        # TODO: Calculate velocity better.
         state = torch.cat((js, velocities_tensor), dim=0).to(device)
         # state = torch.cat((state[:7],velocities_tensor),dim=0)
         all_joints.append(state[:7])
+        all_states.append(state.tolist())
 
-        pos = t.get_end_eff(js.tolist())
+        pos = tester.get_end_eff(js.tolist())
         if one_hot[0]==1:
             pos[2] -= 0.02
             comm.move('point2', pos)
@@ -126,39 +108,41 @@ def online_test(use_baseline, dataset, traj_num,
             comm.move('point3', pos)
 
         # state += velocities_tensor
-        if path_point==0 and t.close_enough(state, grepB):
-            path_point = 1
+        if traj_point==0 and tester.close_enough(state, grepB):
+            traj_point = 1
             one_hot = [1, 0, 0, 0]
             print('here1')
             print(i)
-        elif path_point==1 and t.close_enough(state, putB):
-            path_point = 2
+        elif traj_point==1 and tester.close_enough(state, putB):
+            traj_point = 2
             one_hot = [0, 1, 0, 0]
             print('here2')
             print(i)
-        elif path_point==2 and t.close_enough(state, grepC):
-            path_point = 3
+        elif traj_point==2 and tester.close_enough(state, grepC):
+            traj_point = 3
             one_hot = [0, 0, 1, 0]   
             print('here3')
             print(i)  
-        elif path_point==3 and t.close_enough(state, putC):
-            path_point = 4
+        elif traj_point==3 and tester.close_enough(state, putC):
+            traj_point = 4
             one_hot = [0, 0, 0, 1] 
             print('here4')
             print(i)
 
-    point_loss += path_point
-    return all_joints, point_loss
+    # all_trajs_point += traj_point
+    return all_joints, traj_point, latent_reps, all_states #all_trajs_point
 
 
 # Plot results
-def plot_results(all_joints, all_joints_general, 
-                 plot_number, elem, results_dir):
-    joint_size = 7
-    state_size = 2 * joint_size
-    step_size = 1
-    target_size = 9
-    onehot_size = 4
+def plot_results(tester:Tester, all_joints, all_joints_general, 
+                 eps_num, i_train, results_dir):
+    elem = tester.dataset[eps_num]
+    joint_size = tester.joint_size
+    state_size = tester.state_size
+    step_size = tester.step_size
+    target_size = tester.target_size
+    onehot_size = tester.onehot_size
+
     goal = elem[0][step_size+state_size : 
                    step_size+state_size+target_size
                    ].tolist()
@@ -190,10 +174,10 @@ def plot_results(all_joints, all_joints_general,
         y_general.append(p[1])
         z_general.append(p[2])
 
-    x_real, y_real, z_real = t.get_real_coordinates(plot_number)
+    x_real, y_real, z_real = tester.get_real_coordinates(eps_num)
 
     ln_wd = 2
-    ax.scatter(x, y, z, c='g', s=1, label='Baseline', linewidths=ln_wd)
+    ax.scatter(x, y, z, c='g', s=1, label='Basel', linewidths=ln_wd)
     ax.scatter(x_general, y_general, z_general, c='b', s=1, label='DNFC', linewidths=ln_wd)
     ax.scatter(x_real, y_real, z_real, c='r', s=1, label='G.Truth', linewidths=ln_wd)
 
@@ -211,13 +195,49 @@ def plot_results(all_joints, all_joints_general,
     # ax.set_title('Model Trajectories')
     ax.legend()
     
-    plot_path = os.path.join(results_dir, f'plt_{plot_number}.png')
+    plot_path = os.path.join(results_dir, f'plt_{eps_num}_{i_train}.png')
+    plt.savefig(plot_path)
+    # plt.show()
+    plt.close()
+
+def plot_latent_reps(latent_reps, states, results_dir, eps_num, i_train):
+    # Transpose the data to separate each joint
+    lat_rep_transp = list(zip(*latent_reps))
+    states_transp = list(zip(*states))
+
+    # Plot each joint's position over time
+    time_steps = range(len(latent_reps))  # Assuming each inner list corresponds to a timestep
+
+    plt.figure(figsize=(10, 6))
+    
+    colors = [
+        'blue', 'green', 'red', 'cyan', 'magenta', 'yellow', 
+        'black', 'orange', 'purple', 'brown', 'pink', 'lime', 
+        'teal', 'gold'
+    ]
+
+    for idx, lat_rep in enumerate(lat_rep_transp[:7]):
+        if idx < 7: label_st = f'Joint {idx + 1}'
+        else: label_st = f'Vel. {(idx%7) + 1}'
+
+        plt.plot(time_steps, lat_rep, 
+                 label=f'Dim {idx + 1}', color=colors[idx])
+        plt.plot(time_steps, states_transp[idx], 
+                 label=label_st, color=colors[idx])
+
+    # Add labels, legend, and title
+    plt.xlabel('Time Steps')
+    plt.ylabel('Values')
+    # plt.title('Joint Positions Over Time')
+    plt.legend()
+    plt.grid(True)
+    plot_path = os.path.join(results_dir, f'latent_reps_{eps_num}_{i_train}.png')
     plt.savefig(plot_path)
     # plt.show()
     plt.close()
 
 def log_loss(eps_num, dnfc_succ, basel_succ, results_dir):
-    print("DNFC & Basel perf.", dnfc_succ, basel_succ)
+    print(f"DNFC perf. {dnfc_succ} & Basel perf. {basel_succ}")
     perf_file_path = os.path.join(results_dir, "perf.csv")
     with open(perf_file_path, 'a') as f:
         writer = csv.writer(f)
@@ -225,22 +245,29 @@ def log_loss(eps_num, dnfc_succ, basel_succ, results_dir):
         writer.writerow(row)
 
 
-t = Tester()
-point_loss = 0
-point_loss_model = 0
-num_params = 7.541 #288.661 #25.301
-num_params_base = 7.431
-epoch_num = 1000
-ds_name = 'trajs:360_blocks:3' + '_triangle'
-dataset_path = os.path.join(cur_file_dir_path, 
-                            f'data/torobo/{ds_name}/train_ds.npy')
-dataset = np.load(dataset_path, allow_pickle=True, encoding='latin1')
-print("Loaded dataset w/ shape", dataset.shape)
+def store_states(states_dnfc, states_base):
+    global all_states_dnfc
+    global all_states_base
 
+    all_states_dnfc.append(states_dnfc)
+    all_states_base.append(states_base)
+
+
+def save_list_to_file(lst, results_dir, file_name):
+    file_path = os.path.join(results_dir, file_name)
+    with open(file_path, 'wb') as f:
+        pickle.dump(lst, f)
+
+
+tester = Tester()
+use_only_dnfc = True
+epoch_no = 1000
+train_num = 2
 results_dir = os.path.join(cur_file_dir_path, 
-                           f'results/{ds_name}_{num_params}K_ep:{epoch_num}')
+                           f'results/{config.dataset_name}_{config.num_params}K/ep:{epoch_no}/on_cust')
 if not os.path.exists(results_dir):
     os.makedirs(results_dir)
+print("results_dir", results_dir)
 
 perf_file_path = os.path.join(results_dir, "perf.csv")
 with open(perf_file_path, 'w') as f:
@@ -252,29 +279,38 @@ kin = TorKin()
 # random_idx = random.sample(range(0, 2000), 10)
 sum_dnfc_succ = 0
 sum_basel_succ = 0
+all_states_dnfc = []
+all_states_base = []
 for eps_num in range(27, 149, 7): #random_idx: #range(27, 110):
-    rospy.init_node('denz')
-    print('waining for DNFC')
-    comm.which('\n\n\n\ndnfc start on path'+str(eps_num)+'\n\n\n\n')
-    all_joints_general, loss_general = online_test(False, dataset, eps_num, 
-                                                   num_params, num_params_base, 
-                                                   epoch_num)
+    for i_train in range(train_num):
+        tester.load_model(i_train, epoch_no)
+        rospy.init_node('denz')
+        print('waining for DNFC')
+        comm.which('\n\n\n\ndnfc start on path'+str(eps_num)+'\n\n\n\n')
+        all_joints_general, loss_general, latent_reps, states_dnfc = online_test(tester, eps_num, False)
 
-    print('waining for baseline')
-    comm.which('\n\n\n\nbaseline start on path'+str(eps_num)+'\n\n\n\n')
-    all_joints, loss = online_test(True, dataset, eps_num, 
-                                   num_params, num_params_base, 
-                                   epoch_num)
+        if use_only_dnfc:
+            all_joints, loss, _, states_base = all_joints_general, loss_general, latent_reps, states_dnfc
+        else:
+            print('waining for baseline')
+            comm.which('\n\n\n\nbaseline start on path'+str(eps_num)+'\n\n\n\n')
+            all_joints, loss, _, states_base = online_test(tester, eps_num, True)
 
-    plot_results(all_joints, all_joints_general, 
-                 eps_num, dataset[eps_num], results_dir)
-    
-    dnfc_succ = loss_general / 4
-    sum_dnfc_succ += dnfc_succ
+        plot_results(tester, all_joints, all_joints_general, 
+                    eps_num, i_train, results_dir)
+        
+        dnfc_succ = loss_general / 4
+        sum_dnfc_succ += dnfc_succ
+        basel_succ = loss / 4
+        sum_basel_succ += basel_succ
 
-    basel_succ = loss / 4
-    sum_basel_succ += basel_succ
-
-    log_loss(eps_num, dnfc_succ, basel_succ, results_dir)
+        log_loss(eps_num, dnfc_succ, basel_succ, results_dir)
+        plot_latent_reps(latent_reps, states_dnfc, results_dir, 
+                         eps_num, i_train)
+        
+        store_states(states_dnfc, states_base)
 
 log_loss("sum", sum_dnfc_succ, sum_basel_succ, results_dir)
+save_list_to_file(states_dnfc, results_dir, "states_dnfc")
+save_list_to_file(states_base, results_dir, "states_base")
+

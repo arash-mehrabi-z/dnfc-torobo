@@ -5,14 +5,13 @@ import torchvision.models as models
 
 
 class CustomLoss(nn.Module):
-    def __init__(self, T=None, C=None, D=None, E=None, use_relu_loss=False):
+    def __init__(self, T=None, C=None, D=None, E=None):
         super(CustomLoss, self).__init__()
         self.criterion = nn.MSELoss()
         self.T = T
         self.C = C
         self.D = D
         self.E = E
-        self.use_relu_loss = use_relu_loss
 
     def forward(self, action_predicted, action_ground_truth, x_des, x_t, t):
         t = t / self.T
@@ -20,19 +19,33 @@ class CustomLoss(nn.Module):
 
         mse_latent = torch.mean((x_des - x_t).pow(2), dim=1) #(batch_size, 1)
         
-        if self.use_relu_loss:
-            condition_mask = t < 0.4
-            scalar = (~condition_mask).float()
-        else:
-            exp = torch.exp(self.D * (t - self.E)) #(batch_size, 1)
-            # scalar = self.C * exp
-            scalar = exp
-            # scalar = 1.0
+        exp = torch.exp(self.D * (t - self.E)) #(batch_size, 1)
+        scalar = exp
+        # scalar = 1.0
 
         scaled_mse_latent = scalar * mse_latent
         average_scaled_mse_latent = torch.mean(scaled_mse_latent) #(1, 1)
 
         return (loss_torques + (self.C * average_scaled_mse_latent)), loss_torques
+    
+
+class KLLoss(nn.Module):
+    def __init__(self, C):
+        super(KLLoss, self).__init__()
+        self.torqs_criterion = nn.MSELoss()
+        self.kl_loss = nn.KLDivLoss(reduction="batchmean")
+        self.C = C
+
+    def forward(self, action_predicted, action_ground_truth, x_des, x_t):
+
+        torques_loss = self.torqs_criterion(action_predicted, action_ground_truth)
+        # input should be a distribution in the log space
+        x_des_log = F.log_softmax(x_des, dim=1)
+        x_t_dist = F.softmax(x_t, dim=1)
+
+        latent_kl_loss = self.kl_loss(x_des_log, x_t_dist)
+
+        return (torques_loss + (self.C * latent_kl_loss)), torques_loss
     
 
 class Encoder(nn.Module):
@@ -155,10 +168,10 @@ class GeneralModel(nn.Module):
             # self.enc = Encoder(encoded_space_dim)
             self.enc = AlexNetPT(encoded_space_dim)
         else:
-            self.enc = MLP_3L(target_dim, 128, 128, encoded_space_dim)
+            self.enc = MLP_3L(target_dim, 64, 64, encoded_space_dim)
             # self.enc = MLP_3L(target_dim, 64, 64, encoded_space_dim)
 
-        self.mlp_controller = MLP_3L(encoded_space_dim, 512, 512, action_dim)
+        self.mlp_controller = MLP_3L(encoded_space_dim, 128, 128, action_dim)
         # self.linear = nn.Sequential(
         #     nn.Linear(256, action_dim)
         # )
@@ -182,10 +195,10 @@ class MLPBaseline(nn.Module):
     def __init__(self, inp_dim, out_dim):
         super().__init__()
 
-        self.linear_3l = MLP_3L(inp_dim, 64, 248, 512)
-        self.linear_3l_2 = MLP_3L(512, 256, 64, out_dim)
-        # self.linear_3l = MLP_3L(inp_dim, 32, 64, 128)
-        # self.linear_3l_2 = MLP_3L(128, 68, 66, out_dim)
+        # self.linear_3l = MLP_3L(inp_dim, 64, 248, 512)
+        # self.linear_3l_2 = MLP_3L(512, 256, 64, out_dim)
+        self.linear_3l = MLP_3L(inp_dim, 52, 64, 128)
+        self.linear_3l_2 = MLP_3L(128, 64, 52, out_dim)
         self.linear_3l_2.linear[4].bias.data.fill_(0.0)
 
     def forward(self, x):

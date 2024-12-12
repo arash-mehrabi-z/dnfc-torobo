@@ -20,7 +20,7 @@ from torch.utils.data import DataLoader
 
 from nn_models import GeneralModel
 from nn_models import MLPBaseline
-from nn_models import CustomLoss
+from nn_models import CustomLoss, KLLoss
 
 # np.random.seed(random_seed)
 # torch.manual_seed(random_seed)
@@ -122,9 +122,11 @@ def run_test(n):
                                                                    batch_state)
             
         if use_custom_loss:
+            # loss_custom, loss_torques = criterion(batch_action_pred, batch_action, 
+            #                                     batch_x_des, batch_state, 
+            #                                     batch_step)
             loss_custom, loss_torques = criterion(batch_action_pred, batch_action, 
-                                                batch_x_des, batch_state, 
-                                                batch_step)
+                                                batch_x_des, batch_state)
         else:
             loss_torques = criterion(batch_action_pred, batch_action)
             loss_custom = loss_torques
@@ -228,14 +230,31 @@ def create_csv_files(weights_storage_root_dir, selected_val_ind):
                 row.append(f"act_tru_{val_idx}_{j}")
         writer.writerow(row)
 
+def get_model_name(use_custom_loss, C, D, E, 
+                   use_image, use_baseline, v_name, model):
+    if use_custom_loss: 
+        model_name = f"cus_los_{C}_{D}_{E}"
+        # model_name = f"cus_los_const_mse_st"
+    else: model_name = "mse_los"
+    if use_image: model_name += "|tar_img"
+    else: model_name += "|tar_cart"
+    if use_baseline: model_name += "|base"
+
+    model_name += v_name
+
+    num_params = sum(p.numel() for p in model.parameters())/1e3
+    model_name += f"|{num_params}K_params"
+
+    return model_name
+
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 # Custom Loss:
 num_steps = 299
-T = num_steps #- 1
-C = 5 #1
-D = 10 #5
+T = num_steps #-50
+C = 1e-4
+D = 1 #5
 E = 1
 
 # General:
@@ -243,10 +262,10 @@ current_dir_path = os.path.dirname(__file__)
 current_dir_path = Path(current_dir_path)
 fbc_root_dir_path = current_dir_path.parent.absolute()
 episodes_num_ds = 360
-use_baseline = True     
+use_baseline = False     
 use_image = False
-use_custom_loss = False
-dataset_name = f"trajs:{episodes_num_ds}_blocks:3" + "_triangle"
+use_custom_loss = True
+dataset_name = f"trajs:{episodes_num_ds}_blocks:3" + "_triangle_v"
 ds_root_dir = os.path.join(fbc_root_dir_path, 
                     f'neural_network/data/torobo/{dataset_name}')
 ds_file_name = 'train_ds.npy'
@@ -258,11 +277,11 @@ target_dim = 3*3 + 4
 action_dim = joints_num
 
 # Training:
-num_epochs = 2000 + 1 
+num_epochs = 1000 + 1 
 batch_size = 128
 learning_rate = 3e-4
 validation_interval = 50
-num_trains = 3
+num_trains = 2
 
 train_info = dict()
 for i in range(7):
@@ -285,7 +304,7 @@ for i_train in range(num_trains):
                                 joints_num, target_dim, use_image)
     train_set, val_set = torch.utils.data.random_split(dataset, [0.9, 0.1])
 
-    model_name += '|v_init'
+    model_name += '|v_klloss'
 
     if use_baseline:
         model = MLPBaseline(inp_dim=encoded_space_dim+target_dim, out_dim=action_dim)
@@ -304,7 +323,8 @@ for i_train in range(num_trains):
 
     # Loss
     if use_custom_loss:
-        criterion = CustomLoss(T, C, D, E)
+        # criterion = CustomLoss(T, C, D, E)
+        criterion = KLLoss(C)
     else:
         criterion = nn.MSELoss()
 
@@ -369,8 +389,15 @@ for i_train in range(num_trains):
 
             # TODO: Think about it.
             batch_action_noise = batch_action - batch_noise[:, :joints_num]
-            loss_torques = criterion(batch_action_pred_noise, batch_action_noise)
-            loss_custom = loss_torques
+
+            if use_custom_loss:
+                # loss_custom, loss_torques = criterion(batch_action_pred_noise, batch_action_noise, 
+                #                                       batch_x_des_noise, batch_state, batch_step)
+                loss_custom, loss_torques = criterion(batch_action_pred_noise, batch_action_noise, 
+                                                      batch_x_des_noise, batch_state)
+            else:
+                loss_torques = criterion(batch_action_pred_noise, batch_action_noise)
+                loss_custom = loss_torques
 
             loss_custom.backward()
             optimizer.step()
