@@ -260,11 +260,11 @@ def save_list_to_file(lst, results_dir, file_name):
 
 
 tester = Tester()
-use_only_dnfc = True
-epoch_no = 1000
+use_only_dnfc = False
+epoch_no = 500
 train_num = 2
 results_dir = os.path.join(cur_file_dir_path, 
-                           f'results/{config.dataset_name}_{config.num_params}K/ep:{epoch_no}/on_cust')
+                           f'results/{config.dataset_name}_{config.num_params}K/ep:{epoch_no}/on_{config.v_name}_{config.C}')
 if not os.path.exists(results_dir):
     os.makedirs(results_dir)
 print("results_dir", results_dir)

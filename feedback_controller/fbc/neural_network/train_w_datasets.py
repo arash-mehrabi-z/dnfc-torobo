@@ -253,7 +253,7 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 # Custom Loss:
 num_steps = 299
 T = num_steps #-50
-C = 1e-4
+C = 1e-5
 D = 1 #5
 E = 1
 

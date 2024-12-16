@@ -57,7 +57,7 @@ class Tester():
                                               map_location=torch.device(self.device)))
         self.baseline.load_state_dict(torch.load(base_path, 
                                                  map_location=torch.device(self.device)))
-        print("Loaded model weights from", dnfc_path)
+        print("***\nLoaded model weights from", dnfc_path)
         print("Loaded baseline weights from", base_path)
 
 

@@ -4,7 +4,7 @@ class Config:
         self.use_custom_loss = True
         self.num_steps = 299
         self.T = self.num_steps
-        self.C = 1
+        self.C = 1e-5
         self.D = 1
         self.E = 1
 
@@ -24,7 +24,7 @@ class Config:
         self.onehot_dim = 4
         self.step_dim = 1
 
-        self.num_params = 25.301 #25.045 #7.541 #25.301 # 294.037
+        self.num_params = 25.301 #7.541 #25.301 #25.045 #25.301 # 294.037
         self.num_params_base = 25.175 #7.431 #293.631
 
         
