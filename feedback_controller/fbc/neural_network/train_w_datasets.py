@@ -16,11 +16,13 @@ from torch.utils.data import Dataset
 from torchvision import datasets
 from torchvision import transforms
 from torchvision.io import read_image
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 from nn_models import GeneralModel
 from nn_models import MLPBaseline
 from nn_models import CustomLoss, KLLoss
+
+from config import Config
 
 # np.random.seed(random_seed)
 # torch.manual_seed(random_seed)
@@ -37,6 +39,7 @@ class TrajectoryDataset(Dataset):
 
         data_file_path = os.path.join(ds_root_dir, file_name)
         self.trajectories = np.load(data_file_path)#[0:4]
+        print("loaded data from", data_file_path)
         print("trajectories.shape", self.trajectories.shape)
 
         self.num_trajectories_in_dataset = self.trajectories.shape[0]
@@ -203,15 +206,15 @@ def visualize_losses_second(train_losses1, train_losses2,  val_losses1, val_loss
         
 
 def create_csv_files(weights_storage_root_dir, selected_val_ind):
-    file_path = os.path.join(weights_storage_root_dir, "input_independent_baseline.csv")
-    with open(file_path, 'w') as f:
-        writer = csv.writer(f)
-        row = ["n"]
-        for j in range(2):
-            row.append(f"act_pred_{j}")
-            row.append(f"act_pred_zero_{j}")
-            row.append(f"act_tru_{j}")
-        writer.writerow(row)
+    # file_path = os.path.join(weights_storage_root_dir, "input_independent_baseline.csv")
+    # with open(file_path, 'w') as f:
+    #     writer = csv.writer(f)
+    #     row = ["n"]
+    #     for j in range(2):
+    #         row.append(f"act_pred_{j}")
+    #         row.append(f"act_pred_zero_{j}")
+    #         row.append(f"act_tru_{j}")
+    #     writer.writerow(row)
 
     loss_file_path = os.path.join(weights_storage_root_dir, "loss.csv")
     with open(loss_file_path, 'w') as f:
@@ -220,68 +223,51 @@ def create_csv_files(weights_storage_root_dir, selected_val_ind):
             "val_loss_torques"]
         writer.writerow(row)
 
-    file_path = os.path.join(weights_storage_root_dir, "prediction_dynamics.csv")
-    with open(file_path, 'w') as f:
-        writer = csv.writer(f)
-        row = ["n"]
-        for val_idx in selected_val_ind:
-            for j in range(2):
-                row.append(f"act_pred_{val_idx}_{j}")
-                row.append(f"act_tru_{val_idx}_{j}")
-        writer.writerow(row)
-
-def get_model_name(use_custom_loss, C, D, E, 
-                   use_image, use_baseline, v_name, model):
-    if use_custom_loss: 
-        model_name = f"cus_los_{C}_{D}_{E}"
-        # model_name = f"cus_los_const_mse_st"
-    else: model_name = "mse_los"
-    if use_image: model_name += "|tar_img"
-    else: model_name += "|tar_cart"
-    if use_baseline: model_name += "|base"
-
-    model_name += v_name
-
-    num_params = sum(p.numel() for p in model.parameters())/1e3
-    model_name += f"|{num_params}K_params"
-
-    return model_name
+    # file_path = os.path.join(weights_storage_root_dir, "prediction_dynamics.csv")
+    # with open(file_path, 'w') as f:
+    #     writer = csv.writer(f)
+    #     row = ["n"]
+    #     for val_idx in selected_val_ind:
+    #         for j in range(2):
+    #             row.append(f"act_pred_{val_idx}_{j}")
+    #             row.append(f"act_tru_{val_idx}_{j}")
+    #     writer.writerow(row)
 
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+config = Config()
 
 # Custom Loss:
-num_steps = 299
-T = num_steps #-50
-C = 1e-5
-D = 1 #5
-E = 1
+C = config.C
 
 # General:
 current_dir_path = os.path.dirname(__file__)
 current_dir_path = Path(current_dir_path)
 fbc_root_dir_path = current_dir_path.parent.absolute()
-episodes_num_ds = 360
-use_baseline = False     
-use_image = False
-use_custom_loss = True
-dataset_name = f"trajs:{episodes_num_ds}_blocks:3" + "_triangle_v"
+dataset_name = config.dataset_name
 ds_root_dir = os.path.join(fbc_root_dir_path, 
                     f'neural_network/data/torobo/{dataset_name}')
-ds_file_name = 'train_ds.npy'
+ds_file_name = config.ds_file_name
 
 # Model:
-joints_num = 7
-encoded_space_dim = 2*joints_num
-target_dim = 3*3 + 4
+joints_num = config.joints_num
+encoded_space_dim = config.state_dim
+target_dim = config.coords_dim + config.onehot_dim
 action_dim = joints_num
 
 # Training:
-num_epochs = 1000 + 1 
+use_baseline = False     
+use_image = False
+use_custom_loss = config.use_custom_loss
+num_epochs = 2000 + 1 
 batch_size = 128
 learning_rate = 3e-4
-validation_interval = 50
-num_trains = 2
+validation_interval = 100
+num_trains = 5
+noise_std = 0.004
+
+if use_baseline:
+    use_custom_loss = False
 
 train_info = dict()
 for i in range(7):
@@ -292,46 +278,41 @@ for i_train in range(num_trains):
     fig_1 = plt.figure(figsize=(12.8, 9.6))
     fig_2 = plt.figure(figsize=(12.8, 9.6))
 
-    if use_custom_loss: 
-        model_name = f"cus_los_{C}_{D}_{E}"
-        # model_name = f"cus_los_const_mse_st"
-    else: model_name = "mse_los"
-    if use_image: model_name += "|tar_img"
-    else: model_name += "|tar_cart"
-    if use_baseline: model_name += "|base"
+    model_name = config.get_model_name(use_baseline, use_custom_loss, use_image)
     
     dataset = TrajectoryDataset(ds_root_dir, ds_file_name, 
                                 joints_num, target_dim, use_image)
-    train_set, val_set = torch.utils.data.random_split(dataset, [0.9, 0.1])
-
-    model_name += '|v_klloss'
+    # train_set, val_set = torch.utils.data.random_split(dataset, [0.9, 0.1])
+    train_set, val_set = torch.utils.data.random_split(dataset, [1.0, 0.0])#[0.9, 0.1])
+    train_indices = train_set.indices
+    val_set = Subset(dataset, train_indices[:5])
 
     if use_baseline:
         model = MLPBaseline(inp_dim=encoded_space_dim+target_dim, out_dim=action_dim)
     else:
-        model = GeneralModel(encoded_space_dim=encoded_space_dim, target_dim=target_dim,
-                            action_dim=action_dim, use_image=use_image)
+        model = GeneralModel(encoded_space_dim=encoded_space_dim, target_dim=target_dim, 
+                             action_dim=action_dim, use_image=use_image)
     m = model.to(device)
     num_params = sum(p.numel() for p in m.parameters())/1e3
     model_name += f"|{num_params}K_params"
 
-    selected_val_ind = random.sample(val_set.indices, k=3)
-    selected_train_idx = random.sample(train_set.indices, k=1)[0]
+    # selected_val_ind = random.sample(val_set.indices, k=3)
+    # selected_train_idx = random.sample(train_set.indices, k=1)[0]
 
     train_dataloader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
     val_dataloader = DataLoader(val_set, batch_size=batch_size, shuffle=False)
 
     # Loss
     if use_custom_loss:
-        # criterion = CustomLoss(T, C, D, E)
-        criterion = KLLoss(C)
+        criterion = CustomLoss(C)
+        # criterion = KLLoss(C)
     else:
         criterion = nn.MSELoss()
 
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     # data_tester(train_dataloader, model)
     weights_storage_root_dir = os.path.join(current_dir_path, 
-                                            f"weights/{dataset_name}|{model_name}/train_no_{i_train}")
+                                            f"weights/{dataset_name}|{config.ds_ratio}|{model_name}/train_no_{i_train}")
 
     print(f"=== Train No: {i_train} ===")
     print(f"train num_samples:{len(train_dataloader.dataset)}")
@@ -346,7 +327,7 @@ for i_train in range(num_trains):
     if not os.path.exists(weights_storage_root_dir):
         os.makedirs(weights_storage_root_dir)
     
-    create_csv_files(weights_storage_root_dir, selected_val_ind)
+    create_csv_files(weights_storage_root_dir, selected_val_ind=None)
 
     # while True:
     #     prediction_dynamics(dataset, selected_val_ind)
@@ -374,7 +355,7 @@ for i_train in range(num_trains):
             batch_target_repr = batch_data[2].to(device).float()
             batch_action = batch_data[3].to(device).float()
 
-            batch_noise = torch.normal(mean=0.0, std=0.001, 
+            batch_noise = torch.normal(mean=0.0, std=noise_std, #std=0.001
                                        size=(batch_state.size()[0], encoded_space_dim)
                                        ).to(device).float()
             batch_state_noise = batch_state + batch_noise

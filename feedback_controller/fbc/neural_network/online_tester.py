@@ -16,6 +16,8 @@ import os
 import random
 import csv
 import pickle
+# from tslearn.metrics import dtw_path
+from dtw import *
 
 plt.switch_backend('agg')
 
@@ -38,7 +40,6 @@ def online_test(tester:Tester, eps_num, use_baseline):
                                  ).to(device)
     
     milestones = tester.get_changes_indexes(eps_num)
-    print("milestones", milestones)
     one_hot = elem[0][step_size+state_size+target_size : 
                       step_size+state_size+target_size+onehot_size].tolist()
     goal = elem[0][step_size+state_size : 
@@ -132,10 +133,48 @@ def online_test(tester:Tester, eps_num, use_baseline):
     # all_trajs_point += traj_point
     return all_joints, traj_point, latent_reps, all_states #all_trajs_point
 
+def get_dtw_metric(coords_dnfc, coords_basel, coords_gtruth):
+    x_dnfc, y_dnfc, z_dnfc = coords_dnfc
+    x_basel, y_basel, z_basel = coords_basel
+    x_gtruth, y_gtruth, z_gtruth = coords_gtruth
+
+    dnfc_cart_coords = np.array(list(zip(x_dnfc, y_dnfc, z_dnfc)))
+    basel_cart_coords = np.array(list(zip(x_basel, y_basel, z_basel)))
+    gtruth_cart_coords = np.array(list(zip(x_gtruth, y_gtruth, z_gtruth)))
+    # optimal_path, dtw_score_dnfc = dtw_path(dnfc_cart_coords, gtruth_cart_coords)
+    # optimal_path, dtw_score_basel = dtw_path(basel_cart_coords, gtruth_cart_coords)
+    alignment_dnfc = dtw(dnfc_cart_coords, gtruth_cart_coords)
+    dtw_dnfc = alignment_dnfc.distance
+    dtw_norm_dnfc = alignment_dnfc.normalizedDistance
+
+    alignment_basel = dtw(basel_cart_coords, gtruth_cart_coords)
+    dtw_basel = alignment_basel.distance
+    dtw_norm_basel = alignment_basel.normalizedDistance
+
+    return dtw_dnfc, dtw_basel, dtw_norm_dnfc, dtw_norm_basel
+
+
+def intrinsic_to_3d_cart(all_joints_vals):
+    x, y, z = [], [], []
+    for joints_vals in all_joints_vals:
+        my_l = [0, 0]
+        for j_val in joints_vals:
+            my_l.append(float(j_val))
+        p, R = kin.forwardkin(1, np.array(my_l))
+        x.append(p[0])
+        y.append(p[1])
+        z.append(p[2])
+
+    return x, y, z
+
 
 # Plot results
-def plot_results(tester:Tester, all_joints, all_joints_general, 
+def plot_results(tester:Tester, coords_dnfc, coords_basel, coords_gtruth,
                  eps_num, i_train, results_dir):
+    x_dnfc, y_dnfc, z_dnfc = coords_dnfc
+    x_basel, y_basel, z_basel = coords_basel
+    x_gtruth, y_gtruth, z_gtruth = coords_gtruth
+
     elem = tester.dataset[eps_num]
     joint_size = tester.joint_size
     state_size = tester.state_size
@@ -154,32 +193,10 @@ def plot_results(tester:Tester, all_joints, all_joints_general,
     fig = plt.figure(figsize=(12.8, 9.6))
     ax = fig.add_subplot(111, projection='3d')
 
-    x, y, z = [], [], []
-    x_general, y_general, z_general = [], [], []
-    for new_angles in all_joints:
-        my_l = [0, 0]
-        for j in new_angles:
-            my_l.append(float(j))
-        p, R = kin.forwardkin(1, np.array(my_l))
-        x.append(p[0])
-        y.append(p[1])
-        z.append(p[2])
-
-    for new_angles in all_joints_general:
-        my_l = [0, 0]
-        for j in new_angles:
-            my_l.append(float(j))
-        p, R = kin.forwardkin(1, np.array(my_l))
-        x_general.append(p[0])
-        y_general.append(p[1])
-        z_general.append(p[2])
-
-    x_real, y_real, z_real = tester.get_real_coordinates(eps_num)
-
     ln_wd = 2
-    ax.scatter(x, y, z, c='g', s=1, label='Basel', linewidths=ln_wd)
-    ax.scatter(x_general, y_general, z_general, c='b', s=1, label='DNFC', linewidths=ln_wd)
-    ax.scatter(x_real, y_real, z_real, c='r', s=1, label='G.Truth', linewidths=ln_wd)
+    ax.scatter(x_basel, y_basel, z_basel, c='g', s=1, label='Basel', linewidths=ln_wd)
+    ax.scatter(x_dnfc, y_dnfc, z_dnfc, c='b', s=1, label='DNFC', linewidths=ln_wd)
+    ax.scatter(x_gtruth, y_gtruth, z_gtruth, c='r', s=1, label='G.Truth', linewidths=ln_wd)
 
     ax.scatter([obstA[0]], [obstA[1]], [obstA[2]], c='k', marker='o')
     ax.scatter([obstB[0]], [obstB[1]], [obstB[2]], c='k', marker='o')
@@ -192,13 +209,14 @@ def plot_results(tester:Tester, all_joints, all_joints_general,
     ax.set_xlabel('X Axis')
     ax.set_ylabel('Y Axis')
     ax.set_zlabel('Z Axis')
-    # ax.set_title('Model Trajectories')
+    # ax.set_title(f'DTW DNFC: {dtw_score_dnfc}, DTW Base: {dtw_score_basel}')
     ax.legend()
     
     plot_path = os.path.join(results_dir, f'plt_{eps_num}_{i_train}.png')
     plt.savefig(plot_path)
     # plt.show()
     plt.close()
+
 
 def plot_latent_reps(latent_reps, states, results_dir, eps_num, i_train):
     # Transpose the data to separate each joint
@@ -236,21 +254,29 @@ def plot_latent_reps(latent_reps, states, results_dir, eps_num, i_train):
     # plt.show()
     plt.close()
 
-def log_loss(eps_num, dnfc_succ, basel_succ, results_dir):
+
+def log_loss(eps_num, dnfc_succ, basel_succ, dtw_dnfc, dtw_basel, 
+             dtw_norm_dnfc, dtw_norm_basel, results_dir, file_name):
+    
     print(f"DNFC perf. {dnfc_succ} & Basel perf. {basel_succ}")
-    perf_file_path = os.path.join(results_dir, "perf.csv")
+    print(f"DTW DNFC. {dtw_dnfc} & DTW Basel. {dtw_basel}")
+
+    perf_file_path = os.path.join(results_dir, file_name)
     with open(perf_file_path, 'a') as f:
         writer = csv.writer(f)
-        row = [eps_num, dnfc_succ, basel_succ]
+        row = [eps_num, dnfc_succ, basel_succ, dtw_dnfc, dtw_basel, 
+               dtw_norm_dnfc, dtw_norm_basel]
         writer.writerow(row)
 
 
-def store_states(states_dnfc, states_base):
+def store_states(states_dnfc, states_base, latent_reps):
     global all_states_dnfc
     global all_states_base
+    global all_latent_reps
 
     all_states_dnfc.append(states_dnfc)
     all_states_base.append(states_base)
+    all_latent_reps.append(latent_reps)
 
 
 def save_list_to_file(lst, results_dir, file_name):
@@ -261,10 +287,12 @@ def save_list_to_file(lst, results_dir, file_name):
 
 tester = Tester()
 use_only_dnfc = False
-epoch_no = 500
-train_num = 2
-results_dir = os.path.join(cur_file_dir_path, 
-                           f'results/{config.dataset_name}_{config.num_params}K/ep:{epoch_no}/on_{config.v_name}_{config.C}')
+epoch_no = 1000
+train_num = 5
+
+results_file = f'results/{config.dataset_name}_{config.num_params}K'
+results_file += f'/ep:{epoch_no}/on_{config.v_name}_{config.C}_{config.use_custom_loss}'
+results_dir = os.path.join(cur_file_dir_path, results_file)
 if not os.path.exists(results_dir):
     os.makedirs(results_dir)
 print("results_dir", results_dir)
@@ -272,45 +300,50 @@ print("results_dir", results_dir)
 perf_file_path = os.path.join(results_dir, "perf.csv")
 with open(perf_file_path, 'w') as f:
     writer = csv.writer(f)
-    row = ["eps_num", "dnfc_succ", "basel_succ"]
+    row = ["eps_num", "dnfc_succ", "basel_succ", "dnfc_dtw", "basel_dtw", 
+           "dnfc_norm", "basel_norm"]
     writer.writerow(row)
 
 kin = TorKin()
 # random_idx = random.sample(range(0, 2000), 10)
-sum_dnfc_succ = 0
-sum_basel_succ = 0
 all_states_dnfc = []
 all_states_base = []
-for eps_num in range(27, 149, 7): #random_idx: #range(27, 110):
+all_latent_reps = []
+for eps_num in range(len(tester.dataset)): #random_idx: #range(27, 110):
     for i_train in range(train_num):
-        tester.load_model(i_train, epoch_no)
+        tester.load_model(i_train, epoch_no, config.use_custom_loss)
         rospy.init_node('denz')
         print('waining for DNFC')
         comm.which('\n\n\n\ndnfc start on path'+str(eps_num)+'\n\n\n\n')
-        all_joints_general, loss_general, latent_reps, states_dnfc = online_test(tester, eps_num, False)
+        all_joints_dnfc, loss_dnfc, latent_reps, states_dnfc = online_test(tester, eps_num, False)
 
         if use_only_dnfc:
-            all_joints, loss, _, states_base = all_joints_general, loss_general, latent_reps, states_dnfc
+            all_joints_base, loss_basel, _, states_base = all_joints_dnfc, loss_dnfc, latent_reps, states_dnfc
         else:
             print('waining for baseline')
             comm.which('\n\n\n\nbaseline start on path'+str(eps_num)+'\n\n\n\n')
-            all_joints, loss, _, states_base = online_test(tester, eps_num, True)
+            all_joints_base, loss_basel, _, states_base = online_test(tester, eps_num, True)
 
-        plot_results(tester, all_joints, all_joints_general, 
-                    eps_num, i_train, results_dir)
+        coords_dnfc = intrinsic_to_3d_cart(all_joints_dnfc)
+        coords_basel = intrinsic_to_3d_cart(all_joints_base)
+        coords_gtruth = tester.get_real_coordinates(eps_num)
+
+        dtw_dnfc, dtw_basel, dtw_norm_dnfc, dtw_norm_basel = get_dtw_metric(
+            coords_dnfc, coords_basel, coords_gtruth)
+
+        plot_results(tester, coords_dnfc, coords_basel, coords_gtruth, 
+                     eps_num, i_train, results_dir)
         
-        dnfc_succ = loss_general / 4
-        sum_dnfc_succ += dnfc_succ
-        basel_succ = loss / 4
-        sum_basel_succ += basel_succ
+        dnfc_succ = loss_dnfc / 4
+        basel_succ = loss_basel / 4
 
-        log_loss(eps_num, dnfc_succ, basel_succ, results_dir)
+        log_loss(eps_num, dnfc_succ, basel_succ, dtw_dnfc, dtw_basel, 
+                 dtw_norm_dnfc, dtw_norm_basel, results_dir, "perf.csv")
         plot_latent_reps(latent_reps, states_dnfc, results_dir, 
                          eps_num, i_train)
-        
-        store_states(states_dnfc, states_base)
+        store_states(states_dnfc, states_base, latent_reps)
 
-log_loss("sum", sum_dnfc_succ, sum_basel_succ, results_dir)
-save_list_to_file(states_dnfc, results_dir, "states_dnfc")
-save_list_to_file(states_base, results_dir, "states_base")
+save_list_to_file(all_states_dnfc, results_dir, "all_states_dnfc")
+save_list_to_file(all_states_base, results_dir, "all_states_base")
+save_list_to_file(all_latent_reps, results_dir, "all_latent_reps")
 

@@ -5,23 +5,18 @@ import torchvision.models as models
 
 
 class CustomLoss(nn.Module):
-    def __init__(self, T=None, C=None, D=None, E=None):
+    def __init__(self, C):
         super(CustomLoss, self).__init__()
         self.criterion = nn.MSELoss()
-        self.T = T
         self.C = C
-        self.D = D
-        self.E = E
 
-    def forward(self, action_predicted, action_ground_truth, x_des, x_t, t):
-        t = t / self.T
+    def forward(self, action_predicted, action_ground_truth, x_des, x_t):
         loss_torques = self.criterion(action_predicted, action_ground_truth)
-
         mse_latent = torch.mean((x_des - x_t).pow(2), dim=1) #(batch_size, 1)
         
-        exp = torch.exp(self.D * (t - self.E)) #(batch_size, 1)
-        scalar = exp
-        # scalar = 1.0
+        # exp = torch.exp(self.D * (t - self.E)) #(batch_size, 1)
+        # scalar = exp
+        scalar = 1.0
 
         scaled_mse_latent = scalar * mse_latent
         average_scaled_mse_latent = torch.mean(scaled_mse_latent) #(1, 1)
@@ -39,7 +34,6 @@ class KLLoss(nn.Module):
     def forward(self, action_predicted, action_ground_truth, x_des, x_t):
 
         torques_loss = self.torqs_criterion(action_predicted, action_ground_truth)
-        # input should be a distribution in the log space
         x_des_log = F.log_softmax(x_des, dim=1)
         x_t_dist = F.softmax(x_t, dim=1)
 
@@ -168,10 +162,9 @@ class GeneralModel(nn.Module):
             # self.enc = Encoder(encoded_space_dim)
             self.enc = AlexNetPT(encoded_space_dim)
         else:
-            self.enc = MLP_3L(target_dim, 64, 64, encoded_space_dim)
-            # self.enc = MLP_3L(target_dim, 64, 64, encoded_space_dim)
+            self.enc = MLP_3L(target_dim, 32, 32, encoded_space_dim)
 
-        self.mlp_controller = MLP_3L(encoded_space_dim, 128, 128, action_dim)
+        self.mlp_controller = MLP_3L(encoded_space_dim, 48, 48, action_dim)
         # self.linear = nn.Sequential(
         #     nn.Linear(256, action_dim)
         # )

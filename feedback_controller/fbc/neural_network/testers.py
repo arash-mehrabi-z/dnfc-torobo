@@ -16,32 +16,33 @@ class Tester():
         self.joint_size = self.config.joints_num
         self.state_size = self.config.state_dim
         self.step_size = self.config.step_dim
-        self.target_size = self.config.target_dim
+        self.target_size = self.config.coords_dim
         self.onehot_size = self.config.onehot_dim
         
         self.cur_file_dir_path = os.path.dirname(__file__)
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-        self.load_model(train_no=0, epoch_no=0)
+        self.load_model(train_no=0, epoch_no=0, use_custom_loss=True)
         
         dataset_path = os.path.join(self.cur_file_dir_path, 
-                                    f'data/torobo/{self.config.dataset_name}/train_ds.npy')
+                                    f'data/torobo/{self.config.dataset_name}/{self.config.ds_test_file}')
         self.dataset = np.load(dataset_path, allow_pickle=True, encoding='latin1')
         print("Tester loaded dataset with shape:", self.dataset.shape)
+        print("from this path", dataset_path)
 
         self.kin = TorKin()
         self.criterion = nn.L1Loss()
         self.criterion_mse = nn.MSELoss(reduction='sum')
 
-    def load_model(self, train_no, epoch_no):
-        model_name_dnfc = self.config.get_model_name(False, False)
+    def load_model(self, train_no, epoch_no, use_custom_loss):
+        model_name_dnfc = self.config.get_model_name(False, use_custom_loss, False)
         model_name_dnfc = self.config.add_params_to_name(model_name_dnfc, False)
-        model_name_base = self.config.get_model_name(True, False)
+        model_name_base = self.config.get_model_name(True, False, False)
         model_name_base = self.config.add_params_to_name(model_name_base, True)
 
-        dnfc_adr = f'weights/{self.config.dataset_name}|{model_name_dnfc}' + \
+        dnfc_adr = f'weights/{self.config.dataset_name}|{self.config.ds_ratio}|{model_name_dnfc}' + \
             f'/train_no_{train_no}/fbc_{epoch_no}.pth'
-        base_adr = f'weights/{self.config.dataset_name}|{model_name_base}' + \
+        base_adr = f'weights/{self.config.dataset_name}|{self.config.ds_ratio}|{model_name_base}' + \
             f'/train_no_{train_no}/fbc_{epoch_no}.pth'
 
         self.model = GeneralModel(self.state_size, self.target_size+self.onehot_size, 
@@ -54,9 +55,11 @@ class Tester():
         dnfc_path = os.path.join(self.cur_file_dir_path, dnfc_adr)
         base_path = os.path.join(self.cur_file_dir_path, base_adr)
         self.model.load_state_dict(torch.load(dnfc_path, 
-                                              map_location=torch.device(self.device)))
+                                              map_location=torch.device(self.device),
+                                              weights_only=True))
         self.baseline.load_state_dict(torch.load(base_path, 
-                                                 map_location=torch.device(self.device)))
+                                                 map_location=torch.device(self.device),
+                                                 weights_only=True))
         print("***\nLoaded model weights from", dnfc_path)
         print("Loaded baseline weights from", base_path)
 
