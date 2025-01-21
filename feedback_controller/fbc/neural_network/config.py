@@ -8,10 +8,10 @@ class Config:
         self.v_name = "v_custl_mse" #"v_base" #"v_klloss"
         self.v_name_base = "v_base"
 
-        self.episodes_num_ds = 360
+        self.episodes_num_ds = 2000 #360
         self.dataset_name = f"trajs:{self.episodes_num_ds}_blocks:3" +\
-            "_triangle_v"
-        self.ds_ratio = 0.8
+            "_random"
+        self.ds_ratio = 0.95
         self.ds_file_name = f'train_{self.ds_ratio}.npy'
         self.ds_test_file = f'test_{self.ds_ratio}.npy'
 
@@ -23,8 +23,8 @@ class Config:
         self.onehot_dim = 4
         self.step_dim = 1
 
-        self.num_params = 25.301 #7.541 #3.733 #25.301  #25.045 #25.301 # 294.037
-        self.num_params_base = 25.175 #7.431 #3.753  #293.631
+        self.num_params = 25.301 #91.541 #5.381 #7.541 
+        self.num_params_base = 25.175 #91.541 #5.375 #7.431
 
         
     def get_model_name(self, use_baseline, use_custom_loss, use_image):

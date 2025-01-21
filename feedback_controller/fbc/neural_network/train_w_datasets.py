@@ -9,6 +9,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
 from pathlib import Path
+import sys
 
 import torch
 import torch.nn as nn
@@ -259,7 +260,7 @@ action_dim = joints_num
 use_baseline = False     
 use_image = False
 use_custom_loss = config.use_custom_loss
-num_epochs = 2000 + 1 
+num_epochs = 2500 + 1 
 batch_size = 128
 learning_rate = 3e-4
 validation_interval = 100
@@ -324,7 +325,10 @@ for i_train in range(num_trains):
     print("type_of_criterion", type(criterion))
     print("weights_storage_root_dir", weights_storage_root_dir)
 
-    if not os.path.exists(weights_storage_root_dir):
+    if os.path.exists(weights_storage_root_dir):
+        print("The weight directory exists... Are you training one more time?")
+        sys.exit(1)
+    else:
         os.makedirs(weights_storage_root_dir)
     
     create_csv_files(weights_storage_root_dir, selected_val_ind=None)

@@ -162,9 +162,9 @@ class GeneralModel(nn.Module):
             # self.enc = Encoder(encoded_space_dim)
             self.enc = AlexNetPT(encoded_space_dim)
         else:
-            self.enc = MLP_3L(target_dim, 32, 32, encoded_space_dim)
+            self.enc = MLP_3L(target_dim, 64, 64, encoded_space_dim)
 
-        self.mlp_controller = MLP_3L(encoded_space_dim, 48, 48, action_dim)
+        self.mlp_controller = MLP_3L(encoded_space_dim, 128, 128, action_dim)
         # self.linear = nn.Sequential(
         #     nn.Linear(256, action_dim)
         # )
@@ -188,8 +188,8 @@ class MLPBaseline(nn.Module):
     def __init__(self, inp_dim, out_dim):
         super().__init__()
 
-        # self.linear_3l = MLP_3L(inp_dim, 64, 248, 512)
-        # self.linear_3l_2 = MLP_3L(512, 256, 64, out_dim)
+        # self.linear_3l = MLP_3L(inp_dim, 80, 128, 256)
+        # self.linear_3l_2 = MLP_3L(256, 128, 96, out_dim)
         self.linear_3l = MLP_3L(inp_dim, 52, 64, 128)
         self.linear_3l_2 = MLP_3L(128, 64, 52, out_dim)
         self.linear_3l_2.linear[4].bias.data.fill_(0.0)
