@@ -284,9 +284,14 @@ for i_train in range(num_trains):
     dataset = TrajectoryDataset(ds_root_dir, ds_file_name, 
                                 joints_num, target_dim, use_image)
     # train_set, val_set = torch.utils.data.random_split(dataset, [0.9, 0.1])
-    train_set, val_set = torch.utils.data.random_split(dataset, [1.0, 0.0])#[0.9, 0.1])
-    train_indices = train_set.indices
-    val_set = Subset(dataset, train_indices[:5])
+    train_set, _ = torch.utils.data.random_split(dataset, [1.0, 0.0])#[0.9, 0.1])
+    # train_indices = train_set.indices
+    # val_set = Subset(dataset, train_indices[:5])
+    dataset_test = TrajectoryDataset(ds_root_dir, config.ds_test_file, 
+                                     joints_num, target_dim, use_image)
+    _, val_set = torch.utils.data.random_split(dataset_test, [0.8, 0.2])
+    print("train_set:", len(train_set))
+    print("val_set:", len(val_set))
 
     if use_baseline:
         model = MLPBaseline(inp_dim=encoded_space_dim+target_dim, out_dim=action_dim)

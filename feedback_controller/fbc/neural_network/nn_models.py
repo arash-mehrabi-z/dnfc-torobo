@@ -164,7 +164,7 @@ class GeneralModel(nn.Module):
         else:
             self.enc = MLP_3L(target_dim, 64, 64, encoded_space_dim)
 
-        self.mlp_controller = MLP_3L(encoded_space_dim, 128, 128, action_dim)
+        self.mlp_controller = MLP_3L(encoded_space_dim, 64, 64, action_dim)
         # self.linear = nn.Sequential(
         #     nn.Linear(256, action_dim)
         # )
