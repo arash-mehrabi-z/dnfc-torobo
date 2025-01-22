@@ -190,8 +190,8 @@ class MLPBaseline(nn.Module):
 
         # self.linear_3l = MLP_3L(inp_dim, 80, 128, 256)
         # self.linear_3l_2 = MLP_3L(256, 128, 96, out_dim)
-        self.linear_3l = MLP_3L(inp_dim, 52, 64, 128)
-        self.linear_3l_2 = MLP_3L(128, 64, 52, out_dim)
+        self.linear_3l = MLP_3L(inp_dim, 40, 52, 54)
+        self.linear_3l_2 = MLP_3L(54, 54, 40, out_dim)
         self.linear_3l_2.linear[4].bias.data.fill_(0.0)
 
     def forward(self, x):
