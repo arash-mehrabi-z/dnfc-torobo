@@ -257,10 +257,10 @@ target_dim = config.coords_dim + config.onehot_dim
 action_dim = joints_num
 
 # Training:
-use_baseline = False     
+use_baseline = True     
 use_image = False
 use_custom_loss = config.use_custom_loss
-num_epochs = 5000 + 1 
+num_epochs = 2500 + 1 
 batch_size = 128
 learning_rate = 3e-4
 validation_interval = 100
