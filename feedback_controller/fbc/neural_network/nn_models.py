@@ -3,32 +3,27 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
 
+drop_out=0.02
+
 
 class CustomLoss(nn.Module):
-    def __init__(self, T=None, C=None, D=None, E=None):
+    def __init__(self, C):
         super(CustomLoss, self).__init__()
         self.criterion = nn.MSELoss()
-        self.T = T
         self.C = C
-        self.D = D
-        self.E = E
 
-    def forward(self, action_predicted, action_ground_truth, x_des, x_t, t):
-        t = t / self.T
+    def forward(self, action_predicted, action_ground_truth, x_des, x_t):
         loss_torques = self.criterion(action_predicted, action_ground_truth)
-
         mse_latent = torch.mean((x_des - x_t).pow(2), dim=1) #(batch_size, 1)
         
-        exp = torch.exp(self.D * (t - self.E)) #(batch_size, 1)
-        scalar = exp
-        # scalar = 1.0
+        # exp = torch.exp(self.D * (t - self.E)) #(batch_size, 1)
+        # scalar = exp
+        scalar = 1.0
 
         scaled_mse_latent = scalar * mse_latent
         average_scaled_mse_latent = torch.mean(scaled_mse_latent) #(1, 1)
 
         return (loss_torques + (self.C * average_scaled_mse_latent)), loss_torques
-    
-
 class KLLoss(nn.Module):
     def __init__(self, C):
         super(KLLoss, self).__init__()
@@ -39,7 +34,6 @@ class KLLoss(nn.Module):
     def forward(self, action_predicted, action_ground_truth, x_des, x_t):
 
         torques_loss = self.torqs_criterion(action_predicted, action_ground_truth)
-        # input should be a distribution in the log space
         x_des_log = F.log_softmax(x_des, dim=1)
         x_t_dist = F.softmax(x_t, dim=1)
 
@@ -144,7 +138,18 @@ class AlexNetPT(nn.Module):
         x = self.encoder_lin(x)
         return x
 
+class MLP_2L(nn.Module):
+    def __init__(self, inp_dim, lat_dim_1, out_dim):
+        super().__init__()
+        self.linear = nn.Sequential(
+            nn.Linear(inp_dim, lat_dim_1),
+            nn.ReLU(True),
+            nn.Linear(lat_dim_1, out_dim),
+        )
 
+    def forward(self, x):
+        x = self.linear(x)
+        return x
 class MLP_3L(nn.Module):
     def __init__(self, inp_dim, lat_dim_1, lat_dim_2, out_dim):
         super().__init__()
@@ -159,7 +164,44 @@ class MLP_3L(nn.Module):
     def forward(self, x):
         x = self.linear(x)
         return x
-        
+    
+class MLP_4L(nn.Module):
+    def __init__(self, inp_dim, lat_dim_1, lat_dim_2,lat_dim_3, out_dim):
+        super().__init__()
+        self.linear = nn.Sequential(
+            nn.Linear(inp_dim, lat_dim_1),
+            nn.ReLU(True),
+            nn.Linear(lat_dim_1, lat_dim_2),
+            nn.ReLU(True),
+            nn.Linear(lat_dim_2, lat_dim_3),
+            nn.ReLU(True),
+            nn.Linear(lat_dim_3, out_dim)
+        )
+
+    def forward(self, x):
+        x = self.linear(x)
+        return x   
+    
+class MLP_5L(nn.Module):
+    def __init__(self, inp_dim, lat_dim_1, lat_dim_2,lat_dim_3,lat_dim_4, out_dim):
+        super().__init__()
+        self.linear = nn.Sequential(
+            nn.Linear(inp_dim, lat_dim_1),
+            nn.ReLU(True),
+            nn.Linear(lat_dim_1, lat_dim_2),
+            nn.ReLU(True),
+            nn.Linear(lat_dim_2, lat_dim_3),
+            nn.ReLU(True),
+            nn.Linear(lat_dim_3, lat_dim_4),
+            nn.ReLU(True),
+            nn.Linear(lat_dim_4, out_dim)
+        )
+
+    def forward(self, x):
+        x = self.linear(x)
+        return x 
+    
+   
     
 class GeneralModel(nn.Module):
     def __init__(self, encoded_space_dim, target_dim, action_dim, use_image):
@@ -168,10 +210,9 @@ class GeneralModel(nn.Module):
             # self.enc = Encoder(encoded_space_dim)
             self.enc = AlexNetPT(encoded_space_dim)
         else:
-            self.enc = MLP_3L(target_dim, 64, 64, encoded_space_dim)
-            # self.enc = MLP_3L(target_dim, 64, 64, encoded_space_dim)
+            self.enc = MLP_3L(target_dim, 48, 48, encoded_space_dim)
 
-        self.mlp_controller = MLP_3L(encoded_space_dim, 128, 128, action_dim)
+        self.mlp_controller = MLP_3L(encoded_space_dim, 94, 94, action_dim)
         # self.linear = nn.Sequential(
         #     nn.Linear(256, action_dim)
         # )
@@ -197,11 +238,58 @@ class MLPBaseline(nn.Module):
 
         # self.linear_3l = MLP_3L(inp_dim, 64, 248, 512)
         # self.linear_3l_2 = MLP_3L(512, 256, 64, out_dim)
-        self.linear_3l = MLP_3L(inp_dim, 52, 64, 128)
-        self.linear_3l_2 = MLP_3L(128, 64, 52, out_dim)
+        self.linear_3l = MLP_3L(inp_dim, 48, 58, 64)
+        self.linear_3l_2 = MLP_3L(64, 58, 48, out_dim)
         self.linear_3l_2.linear[4].bias.data.fill_(0.0)
 
     def forward(self, x):
         x = F.relu(self.linear_3l(x))
         act_preds = self.linear_3l_2(x)
+        return act_preds
+    
+class GeneralModel_Deniz(nn.Module):
+    def __init__(self, encoded_space_dim, target_dim, action_dim, use_image):
+        super().__init__()
+        if use_image:
+            # self.enc = Encoder(encoded_space_dim)
+            self.enc = AlexNetPT(encoded_space_dim)
+        else:
+            self.enc = MLP_2L(target_dim, 150, encoded_space_dim)
+
+        self.mlp_controller = MLP_3L(encoded_space_dim,90,90, action_dim)
+        # self.linear = nn.Sequential(
+        #     nn.Linear(64, action_dim)
+        # )
+        self.mlp_controller.linear[4].bias.data.fill_(0.0)
+
+    def forward(self, target_repr, state):
+        x = state
+        # x_des = self.alexnet(img_tensor)
+        x_des = self.enc(target_repr) # (batch_size, encoded_space_dim)
+
+        diff = x_des - x
+        # inp_lat_mlp = torch.cat((diff, state), dim=1)
+
+        acts_pred = self.mlp_controller(diff)
+        # acts_pred = self.linear(F.relu(acts_pred))
+        acts_pred = F.tanh(acts_pred)
+        return acts_pred, x_des, diff
+    
+
+class MLPBaseline_Deniz(nn.Module):
+    def __init__(self, inp_dim, out_dim):
+        super().__init__()
+
+        # self.linear_3l = MLP_3L(inp_dim, 64, 248, 512)
+        # self.linear_3l_2 = MLP_3L(512, 256, 64, out_dim)
+        self.linear_3l = MLP_5L(inp_dim, 52, 72,72, 52, out_dim)
+        # self.linear_3l_2 = MLP_3L(128, 64, 52, out_dim)
+        self.linear_3l.linear[8].bias.data.fill_(0.0)
+
+    def forward(self, x):
+        # x = F.relu(self.linear_3l(x))
+        x = self.linear_3l(x)
+
+        # act_preds = self.linear_3l_2(x)
+        act_preds = F.tanh(x)
         return act_preds
