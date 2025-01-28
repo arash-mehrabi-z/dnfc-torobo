@@ -176,11 +176,11 @@ class GeneralModel(nn.Module):
             # self.enc = Encoder(encoded_space_dim)
             self.enc = AlexNetPT(encoded_space_dim)
         else:
-            self.enc = MLP_2L(target_dim, 64, encoded_space_dim)
+            self.enc = MLP_2L(target_dim, 288, encoded_space_dim)
             # self.enc = MLP_3L(target_dim, 64, 64, encoded_space_dim)
 
         # self.mlp_controller = MLP_3L(encoded_space_dim, 64, 64, action_dim)
-        self.mlp_controller = MLP_2L(encoded_space_dim, 64, 64, action_dim)
+        self.mlp_controller = MLP_2L(encoded_space_dim, 288, action_dim)
         # self.linear = nn.Sequential(
         #     nn.Linear(256, action_dim)
         # )
