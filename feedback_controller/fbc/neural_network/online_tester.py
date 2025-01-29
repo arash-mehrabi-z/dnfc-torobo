@@ -39,7 +39,7 @@ def online_test(tester:Tester, eps_num, use_baseline):
                                  step_size + state_size].tolist()
                                  ).to(device)
     
-    milestones = tester.get_changes_indexes(eps_num)
+    # milestones = tester.get_changes_indexes(eps_num)
     one_hot = elem[0][step_size+state_size+target_size : 
                       step_size+state_size+target_size+onehot_size].tolist()
     goal = elem[0][step_size+state_size : 
@@ -94,7 +94,7 @@ def online_test(tester:Tester, eps_num, use_baseline):
         js = torch.tensor((list(comm.joint_state))).to(device)
         comm.jsLock.release()
 
-        # TODO: Calculate velocity better.
+        # TODO: Calculate velocity better. (!!!)
         state = torch.cat((js, velocities_tensor), dim=0).to(device)
         # state = torch.cat((state[:7],velocities_tensor),dim=0)
         all_joints.append(state[:7])

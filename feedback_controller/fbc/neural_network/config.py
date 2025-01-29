@@ -24,8 +24,8 @@ class Config:
         self.onehot_dim = 4
         self.step_dim = 1
 
-        self.num_params = 11.541 #25.301 #91.541 #5.381 #7.541 
-        self.num_params_base = 11.571 #25.175 #91.541 #5.375 #7.431
+        self.num_params = 14.421 #25.301 #11.541 #91.541 #5.381 #7.541 
+        self.num_params_base = 14.695 #25.175 #11.571 #91.541 #5.375 #7.431
 
         
     def get_model_name(self, use_baseline, use_custom_loss, use_image):
