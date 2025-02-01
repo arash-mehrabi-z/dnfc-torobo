@@ -5,13 +5,13 @@ class Config:
         self.num_steps = 299
         self.C = 1e-5
 
-        self.v_name = "v_custl_mse" #"v_base" #"v_klloss"
-        self.v_name_base = "v_base"
+        self.v_name = "v_custl_mse" + "_tanh_deniz" #"v_base" #"v_klloss"
+        self.v_name_base = "v_base" + "_tanh_deniz"
 
         self.episodes_num_ds = 500 #360
         self.dataset_name = f"trajs:{self.episodes_num_ds}_blocks:3" +\
-            "_random"
-        self.ds_ratio = 0.263
+            "_random" + "_v"
+        self.ds_ratio = 0.8 #0.263
         self.ds_file_name = f'train_{self.ds_ratio}.npy'
         self.ds_ratio_test = 0.95
         self.ds_test_file = f'test_{self.ds_ratio_test}.npy'
@@ -24,7 +24,7 @@ class Config:
         self.onehot_dim = 4
         self.step_dim = 1
 
-        self.num_params = 14.421 #25.301 #11.541 #91.541 #5.381 #7.541 
+        self.num_params = 14.391 #25.301 #11.541 #91.541 #5.381 #7.541 
         self.num_params_base = 14.695 #25.175 #11.571 #91.541 #5.375 #7.431
 
         

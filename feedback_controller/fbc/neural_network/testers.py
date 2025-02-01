@@ -350,7 +350,7 @@ class Tester():
         dist = np.linalg.norm(p1-p2)
         # print(p1, p2, dist)
         # if (self.criterion_mse(torch.tensor(p1), torch.tensor(p2))**0.5) <= 0.0001: 
-        if dist <= 0.02:
+        if dist <= 0.015:#0.02:
             return True
         return False
 
