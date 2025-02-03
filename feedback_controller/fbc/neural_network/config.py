@@ -1,11 +1,11 @@
 class Config:
     def __init__(self):
         # Custom Loss:
-        self.use_custom_loss = False
+        self.use_custom_loss = True
         self.num_steps = 299
         self.C = 1e-5
 
-        self.v_name = "v_custl_mse" + "_7l" #+ "_tanh_deniz" #"v_klloss"
+        self.v_name = "v_custl_mse" + "_nvel_7l" #+ "_tanh_deniz" #"v_klloss"
         self.v_name_base = "v_base" + "_6l" #+ "_tanh_deniz"
 
         self.episodes_num_ds = 500 #360
