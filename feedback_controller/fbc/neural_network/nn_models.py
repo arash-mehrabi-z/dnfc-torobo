@@ -207,9 +207,9 @@ class MLPBaseline(nn.Module):
     def __init__(self, inp_dim, out_dim):
         super().__init__()
 
-        self.linear_2l = MLP_2L(inp_dim, 32, 64)
-        self.linear_2l2 = MLP_2L(64, 128, 128)
-        self.linear_2l3 = MLP_2L(128, 32, out_dim)
+        self.linear_2l = MLP_2L(inp_dim, 32, 32)
+        self.linear_2l2 = MLP_2L(32, 60, 96)
+        self.linear_2l3 = MLP_2L(96, 32, out_dim)
 
         self.linear_2l3.linear[2].bias.data.fill_(0.0)
 
