@@ -262,7 +262,7 @@ use_image = False
 use_custom_loss = config.use_custom_loss
 num_epochs = 2500 + 1 
 batch_size = 128
-learning_rate = 3e-4
+learning_rate = 3e-3
 validation_interval = 100
 num_trains = 5
 noise_std = 0.004
@@ -316,6 +316,7 @@ for i_train in range(num_trains):
         criterion = nn.MSELoss()
 
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.997)  # Adjust gamma as needed
     # data_tester(train_dataloader, model)
     weights_storage_root_dir = os.path.join(current_dir_path, 
                                             f"weights/{dataset_name}|{config.ds_ratio}|{model_name}/train_no_{i_train}")
@@ -400,7 +401,8 @@ for i_train in range(num_trains):
         train_loss_torques /= len(train_dataloader.dataset)
         train_losses_torques.append(train_loss_torques**0.5)
         end_time = time.time()
-
+        
+        scheduler.step()
         if n % validation_interval == 0:
             epoch_time = end_time - start_time
             print(f"Last epoch taken time: {epoch_time:.3f} seconds")
