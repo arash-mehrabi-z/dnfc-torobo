@@ -147,6 +147,7 @@ class MLP_2L(nn.Module):
         super().__init__()
         self.linear = nn.Sequential(
             nn.Linear(inp_dim, lat_dim_1),
+            nn.BatchNorm1d(lat_dim_1),  # Batch Normalization added
             nn.ReLU(True),
             nn.Linear(lat_dim_1, out_dim),
         )
@@ -161,8 +162,10 @@ class MLP_3L(nn.Module):
         super().__init__()
         self.linear = nn.Sequential(
             nn.Linear(inp_dim, lat_dim_1),
+            nn.BatchNorm1d(lat_dim_1),  # Batch Normalization added
             nn.ReLU(True),
             nn.Linear(lat_dim_1, lat_dim_2),
+            nn.BatchNorm1d(lat_dim_2),  # Batch Normalization added
             nn.ReLU(True),
             nn.Linear(lat_dim_2, out_dim)
         )
