@@ -286,7 +286,7 @@ def save_list_to_file(lst, results_dir, file_name):
 
 
 tester = Tester()
-use_only_dnfc = False
+use_only_dnfc = True
 epoch_no = 2000
 train_num = 5
 
@@ -312,7 +312,7 @@ kin = TorKin()
 all_states_dnfc = []
 all_states_base = []
 all_latent_reps = []
-for eps_num in range(len(tester.dataset)): #random_idx: #range(27, 110):
+for eps_num in range(len(tester.dataset) // 3): #random_idx: #range(27, 110):
     for i_train in range(train_num):
         tester.load_model(i_train, epoch_no, config.use_custom_loss)
         rospy.init_node('denz')
