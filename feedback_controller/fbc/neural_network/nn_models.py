@@ -190,7 +190,7 @@ class GeneralModel(nn.Module):
         # self.linear = nn.Sequential(
         #     nn.Linear(256, action_dim)
         # )
-        self.mlp_controller2.linear[2].bias.data.fill_(0.0)
+        self.mlp_controller2.linear[3].bias.data.fill_(0.0)
 
     def forward(self, target_repr, state):
         x = state
@@ -217,7 +217,7 @@ class MLPBaseline(nn.Module):
         self.linear_2l2 = MLP_2L(32, 60, 96)
         self.linear_2l3 = MLP_2L(96, 32, out_dim)
 
-        self.linear_2l3.linear[2].bias.data.fill_(0.0)
+        self.linear_2l3.linear[3].bias.data.fill_(0.0)
 
     def forward(self, x):
         act_preds = self.linear_2l(x)
