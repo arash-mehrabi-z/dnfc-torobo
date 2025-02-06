@@ -79,8 +79,10 @@ def online_test(tester:Tester, eps_num, use_baseline):
         # delta = torch.tensor(elem[i][step_size + state_size + target_size + onehot_size: step_size + state_size + target_size + onehot_size + joint_size ].tolist())
         if use_baseline:
             basel_input = torch.cat((goal_nn, state_nn), dim=1)
+            tester.baseline.eval()
             velocities_tensor = tester.baseline(basel_input)
         else:
+            tester.model.eval()
             velocities_tensor, x_des, _ = tester.model(goal_nn, state_nn)
             x_des = torch.squeeze(x_des, 0)
             latent_reps.append(x_des.tolist())
@@ -286,7 +288,7 @@ def save_list_to_file(lst, results_dir, file_name):
 
 
 tester = Tester()
-use_only_dnfc = True
+use_only_dnfc = False
 epoch_no = 2000
 train_num = 5
 

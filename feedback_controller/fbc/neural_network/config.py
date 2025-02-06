@@ -1,12 +1,12 @@
 class Config:
     def __init__(self):
         # Custom Loss:
-        self.use_custom_loss = True
+        self.use_custom_loss = False
         self.num_steps = 299
         self.C = 1e-5
 
-        self.v_name = "v_custl_mse" + "_nvel_7l" + "_BN" #+ "_tanh_deniz" #"v_klloss"
-        self.v_name_base = "v_base" + "_6l" #+ "_tanh_deniz"
+        self.v_name = "6l_linear" #"v_custl_mse" + "_nvel_7l" + "_BN" #+ "_tanh_deniz" #"v_klloss"
+        self.v_name_base = "v_base" + "_6l" + "_BN" #+ "_tanh_deniz"
 
         self.episodes_num_ds = 500 #360
         self.dataset_name = f"trajs:{self.episodes_num_ds}_blocks:3" +\
@@ -24,8 +24,8 @@ class Config:
         self.onehot_dim = 4
         self.step_dim = 1
 
-        self.num_params = 12.949 #25.301 #11.541 #91.541 #5.381 #7.541 
-        self.num_params_base = 13.123 #25.175 #11.571 #91.541 #5.375 #7.431
+        self.num_params = 13.333 #25.301 #11.541 #91.541 #5.381 #7.541 
+        self.num_params_base = 13.371 #25.175 #11.571 #91.541 #5.375 #7.431
 
         
     def get_model_name(self, use_baseline, use_custom_loss, use_image):
