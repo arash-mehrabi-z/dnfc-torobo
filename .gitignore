@@ -12,4 +12,10 @@ feedback_controller/fbc/neural_network/.ipynb_checkpoints/*
 feedback_controller/fbc/neural_network/weights_old*/*
 feedback_controller/fbc/neural_network/results_old*/*
 feedback_controller/fbc/neural_network/paper/*
+CMakeLists.txt
+erhtor3_store/*
+erhtor3_work/*
+geo_touch/*
+torobo_robot/*
+
 

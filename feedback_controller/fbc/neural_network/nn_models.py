@@ -183,7 +183,7 @@ class GeneralModel(nn.Module):
             self.enc = AlexNetPT(encoded_space_dim)
         else:
             self.enc1 = MLP_2L(target_dim, 128, 256)
-            self.enc2 = MLP_3L(256, 128, encoded_space_dim)
+            self.enc2 = MLP_3L(256, 256, 128, encoded_space_dim)
 
         # self.mlp_controller = MLP_2L(encoded_space_dim, 32, 96)
         # self.mlp_controller2 = MLP_2L(96, 32, action_dim)
