@@ -288,9 +288,9 @@ def save_list_to_file(lst, results_dir, file_name):
 
 
 tester = Tester()
-use_only_dnfc = False
+use_only_dnfc = True
 epoch_no = 2000
-train_num = 5
+train_num = 3
 
 results_file = f'results/{config.dataset_name}_{config.num_params}K'
 results_file += f'/ep:{epoch_no}/on_{config.v_name}_{config.C}_{config.use_custom_loss}'

@@ -24,7 +24,7 @@ class Config:
         self.onehot_dim = 4
         self.step_dim = 1
 
-        self.num_params = 13.333 #25.301 #11.541 #91.541 #5.381 #7.541 
+        self.num_params = 135.415 #13.333 #25.301 #11.541 #91.541 #5.381 #7.541 
         self.num_params_base = 13.371 #25.175 #11.571 #91.541 #5.375 #7.431
 
         
