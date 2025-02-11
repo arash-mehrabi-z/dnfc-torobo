@@ -182,31 +182,30 @@ class GeneralModel(nn.Module):
             # self.enc = Encoder(encoded_space_dim)
             self.enc = AlexNetPT(encoded_space_dim)
         else:
-            self.enc1 = MLP_2L(target_dim, 128, 256)
-            self.enc2 = MLP_3L(256, 256, 128, encoded_space_dim)
+            self.enc1 = MLP_2L(target_dim, 128, encoded_space_dim)
+            # self.enc2 = MLP_3L(256, 256, 128, encoded_space_dim)
 
-        # self.mlp_controller = MLP_2L(encoded_space_dim, 32, 96)
+        self.mlp_controller = MLP_2L(encoded_space_dim, 384, action_dim)
         # self.mlp_controller2 = MLP_2L(96, 32, action_dim)
-        self.linear = nn.Sequential(
-            nn.Linear(encoded_space_dim, action_dim)
-        )
-        self.linear[0].bias.data.fill_(0.0)
+        # self.linear = nn.Sequential(
+        #     nn.Linear(encoded_space_dim, action_dim)
+        # )
+        self.mlp_controller.linear[2].bias.data.fill_(0.0)
 
     def forward(self, target_repr, state):
         x = state
         # x_des = self.alexnet(img_tensor)
         x_des = self.enc1(target_repr) # (batch_size, encoded_space_dim)
-        x_des = self.enc2(F.relu(x_des)) # (batch_size, encoded_space_dim)
+        # x_des = self.enc2(F.relu(x_des)) # (batch_size, encoded_space_dim)
 
         diff = x_des - x
         inp_lat_mlp = diff
         # inp_lat_mlp = torch.cat((diff, state), dim=1)
 
-        # acts_pred = self.mlp_controller(inp_lat_mlp)
+        acts_pred = self.mlp_controller(inp_lat_mlp)
         # acts_pred = self.mlp_controller2(F.relu(acts_pred))
-        acts_pred = self.linear(inp_lat_mlp)
+        
         acts_pred = F.tanh(acts_pred)
-        # acts_pred = self.linear(F.relu(acts_pred))
         return acts_pred, x_des, diff
     
 
@@ -214,16 +213,19 @@ class MLPBaseline(nn.Module):
     def __init__(self, inp_dim, out_dim):
         super().__init__()
 
-        self.linear_2l = MLP_2L(inp_dim, 32, 32)
-        self.linear_2l2 = MLP_2L(32, 60, 96)
-        self.linear_2l3 = MLP_2L(96, 32, out_dim)
-
-        self.linear_2l3.linear[2].bias.data.fill_(0.0)
+        self.linear_2l = MLP_2L(inp_dim, 64, 128)
+        # self.linear_2l2 = MLP_2L(32, 60, 96)
+        # self.linear_2l3 = MLP_2L(96, 32, out_dim)
+        self.linear = nn.Sequential(
+            nn.Linear(128, out_dim)
+        )
+        self.linear[0].bias.data.fill_(0.0)
 
     def forward(self, x):
         act_preds = self.linear_2l(x)
-        act_preds = self.linear_2l2(F.relu(act_preds))
-        act_preds = self.linear_2l3(F.relu(act_preds))
+        # act_preds = self.linear_2l2(F.relu(act_preds))
+        # act_preds = self.linear_2l3(F.relu(act_preds))
+        act_preds = self.linear(F.relu(act_preds))
 
         act_preds = F.tanh(act_preds)
         return act_preds
