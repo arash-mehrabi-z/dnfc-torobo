@@ -22,7 +22,8 @@ class Tester():
         self.cur_file_dir_path = os.path.dirname(__file__)
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-        self.load_model(train_no=0, epoch_no=0, use_custom_loss=False)
+        self.load_model(train_no=0, epoch_no=0, 
+                        use_custom_loss=self.config.use_custom_loss)
         
         dataset_path = os.path.join(self.cur_file_dir_path, 
                                     f'data/torobo/{self.config.dataset_name}/{self.config.ds_test_file}')
@@ -47,19 +48,19 @@ class Tester():
 
         self.model = GeneralModel(self.state_size, self.target_size+self.onehot_size, 
                                   self.joint_size, use_image=False)
-        # self.baseline = MLPBaseline(self.state_size + (self.target_size+self.onehot_size), 
-        #                             self.joint_size)
+        self.baseline = MLPBaseline(self.state_size + (self.target_size+self.onehot_size), 
+                                    self.joint_size)
         m = self.model.to(self.device)
-        # m = self.baseline.to(self.device)
+        m = self.baseline.to(self.device)
 
         dnfc_path = os.path.join(self.cur_file_dir_path, dnfc_adr)
         base_path = os.path.join(self.cur_file_dir_path, base_adr)
         self.model.load_state_dict(torch.load(dnfc_path, 
                                               map_location=torch.device(self.device),
                                               weights_only=True))
-        # self.baseline.load_state_dict(torch.load(base_path, 
-        #                                          map_location=torch.device(self.device),
-        #                                          weights_only=True))
+        self.baseline.load_state_dict(torch.load(base_path, 
+                                                 map_location=torch.device(self.device),
+                                                 weights_only=True))
         print("***\nLoaded model weights from", dnfc_path)
         print("Loaded baseline weights from", base_path)
 

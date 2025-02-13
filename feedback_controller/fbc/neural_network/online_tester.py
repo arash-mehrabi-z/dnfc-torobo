@@ -288,7 +288,7 @@ def save_list_to_file(lst, results_dir, file_name):
 
 
 tester = Tester()
-use_only_dnfc = True
+use_only_dnfc = False
 epoch_no = 2000
 train_num = 3
 
