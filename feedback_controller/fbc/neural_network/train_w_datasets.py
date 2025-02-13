@@ -379,7 +379,7 @@ for i_train in range(num_trains):
                     batch_diff_noise  = model(batch_target_repr, batch_state_noise)
 
             # TODO: Think about it.
-            batch_action_noise = batch_action - batch_noise[:, :joints_num]
+            batch_action_noise = batch_action #- batch_noise[:, :joints_num]
 
             if use_custom_loss:
                 # loss_custom, loss_torques = criterion(batch_action_pred_noise, batch_action_noise, 
