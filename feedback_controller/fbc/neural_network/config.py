@@ -1,7 +1,7 @@
 class Config:
     def __init__(self):
         # Custom Loss:
-        self.use_custom_loss = False
+        self.use_custom_loss = True
         self.num_steps = 299
         self.C = 1e-5
 
