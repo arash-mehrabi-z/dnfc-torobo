@@ -257,7 +257,7 @@ target_dim = config.coords_dim + config.onehot_dim
 action_dim = joints_num
 
 # Training:
-use_baseline = True     
+use_baseline = False     
 use_image = False
 use_custom_loss = config.use_custom_loss
 num_epochs = 2500 + 1 
@@ -379,7 +379,7 @@ for i_train in range(num_trains):
                     batch_diff_noise  = model(batch_target_repr, batch_state_noise)
 
             # TODO: Think about it.
-            batch_action_noise = batch_action #- batch_noise[:, :joints_num]
+            batch_action_noise = batch_action - batch_noise[:, :joints_num]
 
             if use_custom_loss:
                 # loss_custom, loss_torques = criterion(batch_action_pred_noise, batch_action_noise, 

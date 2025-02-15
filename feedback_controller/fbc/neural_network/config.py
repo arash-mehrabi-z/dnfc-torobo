@@ -5,8 +5,8 @@ class Config:
         self.num_steps = 299
         self.C = 1e-5
 
-        self.v_name = "2+2l_lat:sub-nvel" + "_nois" #"6l_linear" #"v_custl_mse" + #"v_klloss"
-        self.v_name_base = "3l_base" + "_nois"
+        self.v_name = "2+2l_lat:sub-nvel" #"6l_linear" #"v_custl_mse" + #"v_klloss"
+        self.v_name_base = "3l_base"
 
         self.episodes_num_ds = 500 #360
         self.dataset_name = f"trajs:{self.episodes_num_ds}_blocks:3" +\
