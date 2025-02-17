@@ -1,7 +1,7 @@
 class Config:
     def __init__(self):
         # Custom Loss:
-        self.use_custom_loss = False
+        self.use_custom_loss = True
         self.num_steps = 299
         self.C = 1e-5
 
@@ -24,8 +24,8 @@ class Config:
         self.onehot_dim = 4
         self.step_dim = 1
 
-        self.num_params = 12.053 #135.415 #13.333 #25.301 #11.541 #91.541 #5.381 #7.541 
-        self.num_params_base = 12.323 #13.371 #25.175 #11.571 #91.541 #5.375 #7.431
+        self.num_params = 36.117 #12.053 #135.415 #13.333 #25.301
+        self.num_params_base = 36.023 #12.323 #13.371 #25.175
 
         
     def get_model_name(self, use_baseline, use_custom_loss, use_image):
