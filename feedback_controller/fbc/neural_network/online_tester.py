@@ -293,7 +293,7 @@ epoch_no = 2000
 train_num = 3
 
 results_file = f'results/{config.dataset_name}_{config.num_params}K'
-results_file += f'/ep:{epoch_no}/on_{config.v_name}_{config.C}_{config.use_custom_loss}'
+results_file += f'/ep:{epoch_no}/on_{config.v_name}_{config.C}_{config.use_custom_loss}_{config.v_name_base}'
 results_dir = os.path.join(cur_file_dir_path, results_file)
 if os.path.exists(results_dir):
     print("Result dir. exists. Are you testing again?")
