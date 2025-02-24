@@ -1,12 +1,12 @@
 class Config:
     def __init__(self):
         # Custom Loss:
-        self.use_custom_loss = False
+        self.use_custom_loss = True
         self.num_steps = 299
         self.C = 1e-5
 
         self.v_name = "2+2l_lat:sub-nvel" #"6l_linear" #"v_custl_mse" + #"v_klloss"
-        self.v_name_base = "4l_base" #"3l_base"
+        self.v_name_base = "3l_base" #"4l_base" 
 
         self.episodes_num_ds = 500 #360
         self.dataset_name = f"trajs:{self.episodes_num_ds}_blocks:3" +\

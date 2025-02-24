@@ -182,15 +182,15 @@ class GeneralModel(nn.Module):
             # self.enc = Encoder(encoded_space_dim)
             self.enc = AlexNetPT(encoded_space_dim)
         else:
-            self.enc1 = MLP_2L(target_dim, 128, encoded_space_dim)
+            self.enc1 = MLP_2L(target_dim, 128*2, encoded_space_dim)
             # self.enc2 = MLP_3L(256, 256, 128, encoded_space_dim)
 
-        self.mlp_controller = MLP_2L(encoded_space_dim, 384, action_dim)
+        self.mlp_controller = MLP_2L(encoded_space_dim, 384*2, action_dim)
         # self.mlp_controller2 = MLP_2L(96, 32, action_dim)
         # self.linear = nn.Sequential(
         #     nn.Linear(encoded_space_dim, action_dim)
         # )
-        self.mlp_controller.linear[2].bias.data.fill_(0.0)
+        self.mlp_controller.linear[-1].bias.data.fill_(0.0)
 
     def forward(self, target_repr, state):
         x = state
@@ -213,18 +213,18 @@ class MLPBaseline(nn.Module):
     def __init__(self, inp_dim, out_dim):
         super().__init__()
         # print("########", inp_dim)
-        self.linear_2l = MLP_2L(inp_dim, (2*inp_dim)+11, 96*2)
-        self.linear_2l2 = MLP_2L(96*2, 2*2*inp_dim, out_dim)
-        # self.linear = nn.Sequential(
-        #     nn.Linear(192*3, out_dim)
-        # )
-        # self.linear[0].bias.data.fill_(0.0)
-        self.linear_2l2.linear[-1].bias.data.fill_(0.0)
+        self.linear_2l = MLP_2L(inp_dim, 2*inp_dim-2, 192*2)
+        # self.linear_2l2 = MLP_2L(96*2, 2*2*inp_dim, out_dim)
+        # self.linear_2l2.linear[-1].bias.data.fill_(0.0)
+        self.linear = nn.Sequential(
+            nn.Linear(192*2, out_dim)
+        )
+        self.linear[-1].bias.data.fill_(0.0)
 
     def forward(self, x):
         act_preds = self.linear_2l(x)
-        act_preds = self.linear_2l2(F.relu(act_preds))
-        # act_preds = self.linear(F.relu(act_preds))
+        # act_preds = self.linear_2l2(F.relu(act_preds))
+        act_preds = self.linear(F.relu(act_preds))
 
         act_preds = F.tanh(act_preds)
         return act_preds
