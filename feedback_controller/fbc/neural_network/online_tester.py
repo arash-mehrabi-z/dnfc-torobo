@@ -290,7 +290,7 @@ def save_list_to_file(lst, results_dir, file_name):
 tester = Tester()
 use_only_dnfc = False
 epoch_no = 2000
-train_num = 3
+train_num = 5
 
 results_file = f'results/{config.dataset_name}_{config.num_params}K'
 results_file += f'/ep:{epoch_no}/on_{config.v_name}_{config.C}_{config.use_custom_loss}_{config.v_name_base}'
