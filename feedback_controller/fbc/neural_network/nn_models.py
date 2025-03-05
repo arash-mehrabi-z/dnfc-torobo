@@ -213,11 +213,11 @@ class MLPBaseline(nn.Module):
     def __init__(self, inp_dim, out_dim):
         super().__init__()
         # print("########", inp_dim)
-        self.linear_2l = MLP_2L(inp_dim, 3*inp_dim-7, int(270*(1.5)))#192*2)
+        self.linear_2l = MLP_2L(inp_dim, 3*inp_dim-7, int(270*(1.5)+10))#192*2)
         # self.linear_2l2 = MLP_2L(96*2, 2*2*inp_dim, out_dim)
         # self.linear_2l2.linear[-1].bias.data.fill_(0.0)
         self.linear = nn.Sequential(
-            nn.Linear(int(270*(1.5)), out_dim)
+            nn.Linear(int(270*(1.5)+10), out_dim)
         )
         self.linear[-1].bias.data.fill_(0.0)
 
