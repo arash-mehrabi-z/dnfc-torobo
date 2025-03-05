@@ -260,7 +260,7 @@ action_dim = joints_num
 use_baseline = False     
 use_image = False
 use_custom_loss = config.use_custom_loss
-num_epochs = 2500 + 1 
+num_epochs = 3000 + 1 
 batch_size = 128
 learning_rate = 3e-4
 validation_interval = 100
@@ -289,7 +289,7 @@ for i_train in range(num_trains):
     # val_set = Subset(dataset, train_indices[:5])
     dataset_test = TrajectoryDataset(ds_root_dir, config.ds_test_file, 
                                      joints_num, target_dim, use_image)
-    _, val_set = torch.utils.data.random_split(dataset_test, [0.8, 0.2])
+    _, val_set = torch.utils.data.random_split(dataset_test, [0.0, 1.0])
     print("train_set:", len(train_set))
     print("val_set:", len(val_set))
 
