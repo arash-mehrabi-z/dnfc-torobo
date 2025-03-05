@@ -314,7 +314,7 @@ kin = TorKin()
 all_states_dnfc = []
 all_states_base = []
 all_latent_reps = []
-for eps_num in range(len(tester.dataset)// 4): #random_idx: #range(27, 110):
+for eps_num in range(len(tester.dataset)): #random_idx: #range(27, 110):
     for i_train in range(train_num):
         tester.load_model(i_train, epoch_no, config.use_custom_loss)
         rospy.init_node('denz')

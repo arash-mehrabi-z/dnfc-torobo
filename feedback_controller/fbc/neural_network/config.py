@@ -13,7 +13,7 @@ class Config:
             "_triangle_portion_v" #"_triangle_v" #"_random"
         self.ds_ratio = 0.8 #0.263
         self.ds_file_name = f'train_{self.ds_ratio}.npy'
-        self.ds_ratio_test = 0.8 #"0.8_0.5" #0.95
+        self.ds_ratio_test = "0.8_even" #"0.8_0.5" #0.95
         self.ds_test_file = f'test_{self.ds_ratio_test}.npy'
 
         self.joints_num = 7
