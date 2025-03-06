@@ -1,7 +1,7 @@
 class Config:
     def __init__(self):
         # Custom Loss:
-        self.use_custom_loss = False
+        self.use_custom_loss = True
         self.num_steps = 299
         self.C = 1e-5
 
@@ -13,7 +13,7 @@ class Config:
             "_triangle_portion_v" #"_triangle_v" #"_random"
         self.ds_ratio = 0.8 #0.263
         self.ds_file_name = f'train_{self.ds_ratio}.npy'
-        self.ds_ratio_test = "0.8" #"0.8_even" #"0.8_0.5"
+        self.ds_ratio_test = "0.8" #"0.8_even" # #"0.8_0.5"
         self.ds_test_file = f'test_{self.ds_ratio_test}.npy'
 
         self.joints_num = 7
@@ -24,8 +24,8 @@ class Config:
         self.onehot_dim = 4
         self.step_dim = 1
 
-        self.num_params = 24.085 #12.053 #36.117
-        self.num_params_base = 24.219 #12.103 #36.023
+        self.num_params = 36.117 #24.085 #12.053
+        self.num_params_base = 36.109 #24.219 #12.103
 
         
     def get_model_name(self, use_baseline, use_custom_loss, use_image):
