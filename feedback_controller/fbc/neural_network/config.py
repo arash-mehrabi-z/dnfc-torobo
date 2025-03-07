@@ -8,12 +8,12 @@ class Config:
         self.v_name = "2+2l_lat:sub-nvel" #"6l_linear" #"v_custl_mse" + #"v_klloss"
         self.v_name_base = "3l_base" #"4l_base" 
 
-        self.episodes_num_ds = 360 #500 #360
+        self.episodes_num_ds = 72 #360 #500
         self.dataset_name = f"trajs:{self.episodes_num_ds}_blocks:3" +\
-            "_triangle_portion_v" #"_triangle_v" #"_random"
-        self.ds_ratio = 0.8 #0.263
+            "_triangle_v_scarce" #"_triangle_portion_v" #"_random"
+        self.ds_ratio = "interp_0.8" #0.263
         self.ds_file_name = f'train_{self.ds_ratio}.npy'
-        self.ds_ratio_test = "0.8_even" #"0.8" # #"0.8_0.5" #!!! IMPORTANT !!!
+        self.ds_ratio_test = "interp_0.8" #"0.8_even" #"0.8" # #"0.8_0.5"
         self.ds_test_file = f'test_{self.ds_ratio_test}.npy'
 
         self.joints_num = 7
