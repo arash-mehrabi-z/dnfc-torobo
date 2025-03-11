@@ -292,7 +292,7 @@ use_only_dnfc = False
 epoch_no = 2000
 train_num = 5
 
-results_file = f'results/{config.dataset_name}_{config.num_params}K'
+results_file = f'results/{config.dataset_name}_{config.num_params}K_{config.ds_ratio}'
 results_file += f'/ep:{epoch_no}/on_{config.v_name}_{config.C}_{config.use_custom_loss}_{config.v_name_base}'
 results_dir = os.path.join(cur_file_dir_path, results_file)
 if os.path.exists(results_dir):
