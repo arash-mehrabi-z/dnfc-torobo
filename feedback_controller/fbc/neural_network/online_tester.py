@@ -289,7 +289,7 @@ def save_list_to_file(lst, results_dir, file_name):
 
 tester = Tester()
 use_only_dnfc = False
-epoch_no = 2000
+epoch_no = 400 #2000
 train_num = 5
 
 results_file = f'results/{config.dataset_name}_{config.num_params}K_{config.ds_ratio}'

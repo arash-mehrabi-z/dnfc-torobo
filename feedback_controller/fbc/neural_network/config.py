@@ -11,9 +11,9 @@ class Config:
         self.episodes_num_ds = 72 #360 #500
         self.dataset_name = f"trajs:{self.episodes_num_ds}_blocks:3" +\
             "_triangle_v_scarce" #"_triangle_portion_v" #"_random"
-        self.ds_ratio = "extrap_0.9" #"interp_0.8" #0.263
+        self.ds_ratio = "extrap_0.8" #"interp_0.8" #0.263
         self.ds_file_name = f'train_{self.ds_ratio}.npy'
-        self.ds_ratio_test = "extrap_0.9" #"interp_0.8" #"0.8"
+        self.ds_ratio_test = "extrap_0.8" #"interp_0.8" #"0.8"
         self.ds_test_file = f'test_{self.ds_ratio_test}.npy'
 
         self.joints_num = 7
@@ -24,8 +24,8 @@ class Config:
         self.onehot_dim = 4
         self.step_dim = 1
 
-        self.num_params = 6.037 #24.085 #36.117
-        self.num_params_base = 6.039 #24.091 #36.109
+        self.num_params = 24.085 #6.037 #36.117
+        self.num_params_base = 24.091 #6.039 #36.109
 
         
     def get_model_name(self, use_baseline, use_custom_loss, use_image):
