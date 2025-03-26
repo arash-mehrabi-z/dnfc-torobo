@@ -170,8 +170,8 @@ def visualize_losses(train_losses, val_losses, n, file_name, title, fig):
     plt.legend()
     plt.title(title)
     
-    # Set y-axis limit
-    plt.ylim([0, 0.01])
+    # # Set y-axis limit
+    # plt.ylim([0, 0.01])
     
     # Update the plot
     plt.draw()
@@ -257,7 +257,7 @@ target_dim = config.coords_dim + config.onehot_dim
 action_dim = joints_num
 
 # Training:
-use_baseline = False     
+use_baseline = True     
 use_image = False
 use_custom_loss = config.use_custom_loss
 num_epochs = 4000 + 1 
@@ -348,8 +348,8 @@ for model_complexity in ['low', 'medium', 'high']:
         # while True:
         #     prediction_dynamics(dataset, selected_val_ind)
 
-        train_loss_custom = 0
-        train_loss_torques = 0
+        train_loss_custom = 1e-10
+        train_loss_torques = 1e-10
         train_losses_custom = [train_loss_custom]
         train_losses_torques = [train_loss_torques]
         val_losses_custom = []
