@@ -158,11 +158,11 @@ def visualize_losses(train_losses, val_losses, n, file_name, title, fig):
     plt.clf()
     
     # Plot validation loss
-    plt.plot([-1] + list(range(0, n+1, validation_interval)), val_losses, 
+    plt.plot([-1] + list(range(0, n+1, validation_interval)), np.log(val_losses), 
              label='Validation Loss')
     
     # Plot training loss
-    plt.plot(list(range(len(train_losses))), train_losses, 
+    plt.plot(list(range(len(train_losses))), np.log(train_losses), 
              label='Training Loss')
 
     plt.xlabel('Epochs')
