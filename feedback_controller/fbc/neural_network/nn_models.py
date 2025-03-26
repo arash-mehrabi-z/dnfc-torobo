@@ -176,16 +176,17 @@ class MLP_3L(nn.Module):
         
     
 class GeneralModel(nn.Module):
-    def __init__(self, encoded_space_dim, target_dim, action_dim, use_image):
+    def __init__(self, encoded_space_dim, target_dim, action_dim,
+                 enc_hid, cont_hid, use_image):
         super().__init__()
         if use_image:
             # self.enc = Encoder(encoded_space_dim)
             self.enc = AlexNetPT(encoded_space_dim)
         else:
-            self.enc1 = MLP_2L(target_dim, 128*2, encoded_space_dim)
+            self.enc1 = MLP_2L(target_dim, enc_hid, encoded_space_dim)
             # self.enc2 = MLP_3L(256, 256, 128, encoded_space_dim)
 
-        self.mlp_controller = MLP_2L(encoded_space_dim, 384*2, action_dim)
+        self.mlp_controller = MLP_2L(encoded_space_dim, cont_hid, action_dim)
         # self.mlp_controller2 = MLP_2L(96, 32, action_dim)
         # self.linear = nn.Sequential(
         #     nn.Linear(encoded_space_dim, action_dim)
@@ -210,15 +211,14 @@ class GeneralModel(nn.Module):
     
 
 class MLPBaseline(nn.Module):
-    def __init__(self, inp_dim, out_dim):
+    def __init__(self, inp_dim, lin_hid, lin_out, out_dim):
         super().__init__()
         # print("########", inp_dim)
-        self.linear_2l = MLP_2L(inp_dim, 2*inp_dim-3, 192*2)
+        self.linear_2l = MLP_2L(inp_dim, lin_hid, lin_out)
         # self.linear_2l2 = MLP_2L(96*2, 2*2*inp_dim, out_dim)
-        # self.linear_2l2.linear[-1].bias.data.fill_(0.0)
         self.linear = nn.Sequential(
             # nn.Linear(int(270*(0.75)+10), out_dim)
-            nn.Linear(192*2, out_dim)
+            nn.Linear(lin_out, out_dim)
         )
         self.linear[-1].bias.data.fill_(0.0)
 

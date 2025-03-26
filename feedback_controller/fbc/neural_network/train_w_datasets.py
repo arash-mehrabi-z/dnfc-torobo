@@ -135,8 +135,8 @@ def run_test(n):
             loss_torques = criterion(batch_action_pred, batch_action)
             loss_custom = loss_torques
 
-        val_loss_cutsom += loss_custom.item() * batch_state.size(0)
-        val_loss_torques += loss_torques.item() * batch_state.size(0)
+        val_loss_cutsom += loss_custom.item() #* batch_state.size(0)
+        val_loss_torques += loss_torques.item() #* batch_state.size(0)
 
     val_loss_cutsom /= len(val_dataloader.dataset)
     val_losses_custom.append(val_loss_cutsom**0.5)
@@ -260,7 +260,7 @@ action_dim = joints_num
 use_baseline = False     
 use_image = False
 use_custom_loss = config.use_custom_loss
-num_epochs = 3000 + 1 
+num_epochs = 4000 + 1 
 batch_size = 128
 learning_rate = 3e-4
 validation_interval = 100
@@ -275,159 +275,165 @@ for i in range(7):
     train_info[f'mae_joint_{i+1}_val'] = []
     train_info[f'mae_joint_{i+1}_train'] = []
 
-for i_train in range(num_trains):
-    fig_1 = plt.figure(figsize=(12.8, 9.6))
-    fig_2 = plt.figure(figsize=(12.8, 9.6))
-
-    model_name = config.get_model_name(use_baseline, use_custom_loss, use_image)
+for model_complexity in ['low', 'medium', 'high']:
+    enc_hid, cont_hid, lin_hid, lin_out = config.get_model_dims(model_complexity)
     
-    dataset = TrajectoryDataset(ds_root_dir, ds_file_name, 
-                                joints_num, target_dim, use_image)
-    # train_set, val_set = torch.utils.data.random_split(dataset, [0.9, 0.1])
-    train_set, _ = torch.utils.data.random_split(dataset, [1.0, 0.0])#[0.9, 0.1])
-    # train_indices = train_set.indices
-    # val_set = Subset(dataset, train_indices[:5])
-    dataset_test = TrajectoryDataset(ds_root_dir, config.ds_test_file, 
-                                     joints_num, target_dim, use_image)
-    _, val_set = torch.utils.data.random_split(dataset_test, [0.0, 1.0])
-    print("train_set:", len(train_set))
-    print("val_set:", len(val_set))
+    for i_train in range(num_trains):
+        fig_1 = plt.figure(figsize=(12.8, 9.6))
+        fig_2 = plt.figure(figsize=(12.8, 9.6))
 
-    if use_baseline:
-        model = MLPBaseline(inp_dim=encoded_space_dim+target_dim, out_dim=action_dim)
-    else:
-        model = GeneralModel(encoded_space_dim=encoded_space_dim, target_dim=target_dim, 
-                             action_dim=action_dim, use_image=use_image)
-    m = model.to(device)
-    num_params = sum(p.numel() for p in m.parameters())/1e3
-    model_name += f"|{num_params}K_params"
+        model_name = config.get_model_name(use_baseline, use_custom_loss, use_image)
+        
+        dataset = TrajectoryDataset(ds_root_dir, ds_file_name, 
+                                    joints_num, target_dim, use_image)
+        # train_set, val_set = torch.utils.data.random_split(dataset, [0.9, 0.1])
+        split_file_path = os.path.join(ds_root_dir, config.train_val_file)
+        split = torch.load(split_file_path)
+        train_indices = split['train_indices']
+        val_indices = split['val_indices']
+        train_set = Subset(dataset, train_indices)
+        val_set = Subset(dataset, val_indices)
+        print("train_set:", len(train_set))
+        print("val_set:", len(val_set))
 
-    # selected_val_ind = random.sample(val_set.indices, k=3)
-    # selected_train_idx = random.sample(train_set.indices, k=1)[0]
+        if use_baseline:
+            model = MLPBaseline(inp_dim=encoded_space_dim+target_dim, 
+                                lin_hid=lin_hid, lin_out=lin_out,
+                                out_dim=action_dim)
+        else:
+            model = GeneralModel(encoded_space_dim=encoded_space_dim, target_dim=target_dim,
+                                 enc_hid=enc_hid, cont_hid=cont_hid,
+                                 action_dim=action_dim, use_image=use_image)
+        m = model.to(device)
+        num_params = sum(p.numel() for p in m.parameters())/1e3
+        model_name += f"|{num_params}K_params"
 
-    train_dataloader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
-    val_dataloader = DataLoader(val_set, batch_size=batch_size, shuffle=False)
+        # selected_val_ind = random.sample(val_set.indices, k=3)
+        # selected_train_idx = random.sample(train_set.indices, k=1)[0]
 
-    # Loss
-    if use_custom_loss:
-        criterion = CustomLoss(C)
-        # criterion = KLLoss(C)
-    else:
-        criterion = nn.MSELoss()
+        train_dataloader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
+        val_dataloader = DataLoader(val_set, batch_size=batch_size, shuffle=False)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    # scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.997)  # Adjust gamma as needed
-    # data_tester(train_dataloader, model)
-    weights_storage_root_dir = os.path.join(current_dir_path, 
-                                            f"weights/{dataset_name}|{config.ds_ratio}|{model_name}/train_no_{i_train}")
+        # Loss
+        if use_custom_loss:
+            criterion = CustomLoss(C)
+            # criterion = KLLoss(C)
+        else:
+            criterion = nn.MSELoss()
 
-    print(f"=== Train No: {i_train} ===")
-    print(f"train num_samples:{len(train_dataloader.dataset)}")
-    print(f"val num_samples:{len(val_dataloader.dataset)}")
-    print("device:", device)
-    print("dataset_name", dataset_name)
-    print("model_name", model_name)
-    print(num_params, 'K parameters')
-    print("type_of_criterion", type(criterion))
-    print("weights_storage_root_dir", weights_storage_root_dir)
+        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+        # scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.997)  # Adjust gamma as needed
+        # data_tester(train_dataloader, model)
+        weights_storage_root_dir = os.path.join(current_dir_path, 
+                                                f"weights/{dataset_name}|{config.ds_ratio}|{model_name}/train_no_{i_train}")
 
-    if os.path.exists(weights_storage_root_dir):
-        print("The weight directory exists... Are you training one more time?")
-        sys.exit(1)
-    else:
-        os.makedirs(weights_storage_root_dir)
-    
-    create_csv_files(weights_storage_root_dir, selected_val_ind=None)
+        print(f"=== Train No: {i_train} ===")
+        print(f"train num_samples:{len(train_dataloader.dataset)}")
+        print(f"val num_samples:{len(val_dataloader.dataset)}")
+        print("device:", device)
+        print("dataset_name", dataset_name)
+        print("model_name", model_name)
+        print(num_params, 'K parameters')
+        print("type_of_criterion", type(criterion))
+        print("weights_storage_root_dir", weights_storage_root_dir)
 
-    # while True:
-    #     prediction_dynamics(dataset, selected_val_ind)
+        if os.path.exists(weights_storage_root_dir):
+            print("The weight directory exists... Are you training one more time?")
+            sys.exit(1)
+        else:
+            os.makedirs(weights_storage_root_dir)
+        
+        create_csv_files(weights_storage_root_dir, selected_val_ind=None)
 
-    train_loss_custom = 0
-    train_loss_torques = 0
-    train_losses_custom = [train_loss_custom]
-    train_losses_torques = [train_loss_torques]
-    val_losses_custom = []
-    val_losses_torques = []
+        # while True:
+        #     prediction_dynamics(dataset, selected_val_ind)
 
-    for n in range(num_epochs):
-        if n == 0:
-            run_test(n)
-            # pass
-
-        start_time = time.time()
         train_loss_custom = 0
         train_loss_torques = 0
+        train_losses_custom = [train_loss_custom]
+        train_losses_torques = [train_loss_torques]
+        val_losses_custom = []
+        val_losses_torques = []
 
-        model.train()
-        for i, batch_data in enumerate(train_dataloader):
-            batch_step = batch_data[0].to(device).float()
-            batch_state = batch_data[1].to(device).float()
-            batch_target_repr = batch_data[2].to(device).float()
-            batch_action = batch_data[3].to(device).float()
+        for n in range(num_epochs):
+            if n == 0:
+                run_test(n)
+                # pass
 
-            batch_noise = torch.normal(mean=0.0, std=noise_std, #std=0.001
-                                       size=(batch_state.size()[0], encoded_space_dim)
-                                       ).to(device).float()
-            batch_state_noise = batch_state + batch_noise
-        
-            optimizer.zero_grad()
-            if use_baseline:
-                nn_input = torch.cat((batch_target_repr, batch_state_noise), dim=1)
-                batch_action_pred_noise = model(nn_input)
-            else:
-                batch_action_pred_noise , batch_x_des_noise, \
-                    batch_diff_noise  = model(batch_target_repr, batch_state_noise)
+            start_time = time.time()
+            train_loss_custom = 0
+            train_loss_torques = 0
 
-            # TODO: Think about it.
-            batch_action_noise = batch_action - batch_noise[:, :joints_num]
+            model.train()
+            for i, batch_data in enumerate(train_dataloader):
+                batch_step = batch_data[0].to(device).float()
+                batch_state = batch_data[1].to(device).float()
+                batch_target_repr = batch_data[2].to(device).float()
+                batch_action = batch_data[3].to(device).float()
 
-            if use_custom_loss:
-                # loss_custom, loss_torques = criterion(batch_action_pred_noise, batch_action_noise, 
-                #                                       batch_x_des_noise, batch_state, batch_step)
-                loss_custom, loss_torques = criterion(batch_action_pred_noise, batch_action_noise, 
-                                                      batch_x_des_noise, batch_state)
-            else:
-                loss_torques = criterion(batch_action_pred_noise, batch_action_noise)
-                loss_custom = loss_torques
-
-            loss_custom.backward()
-            optimizer.step()
-
-            train_loss_custom += loss_custom.item() * batch_action.size(0)
-            train_loss_torques += loss_torques.item() * batch_action.size(0)
-        
-        train_loss_custom /= len(train_dataloader.dataset)
-        train_losses_custom.append(train_loss_custom**0.5)
-        train_loss_torques /= len(train_dataloader.dataset)
-        train_losses_torques.append(train_loss_torques**0.5)
-        end_time = time.time()
-        
-        # scheduler.step()
-        if n % validation_interval == 0:
-            epoch_time = end_time - start_time
-            print(f"Last epoch taken time: {epoch_time:.3f} seconds")
-
-            act_abs_diff = torch.abs(batch_action_pred_noise - batch_action)
-            mean_abs_diff = torch.mean(act_abs_diff, dim=0)
-            for k in range(7):
-                train_info[f'mae_joint_{k+1}_train'].append(mean_abs_diff[k].item())
-
-            run_test(n)
-
-            # input_independent_baseline(dataset, selected_train_idx)
-            # prediction_dynamics(dataset, selected_val_ind)
-
-            weight_file_path = os.path.join(weights_storage_root_dir, f"fbc_{n}.pth")
-            torch.save(model.state_dict(), weight_file_path)
-
-            info_file_path = os.path.join(weights_storage_root_dir, f"info.pickle")
-            with open(info_file_path, 'wb') as handle:
-                pickle.dump(train_info, handle, protocol=pickle.HIGHEST_PROTOCOL)
-
-            visualize_losses(train_losses_custom, val_losses_custom, n, 
-                            f"loss_custom_{n//100}.png", "Custom Loss", fig_1)
-            visualize_losses(train_losses_torques, val_losses_torques, n, 
-                            f"loss_torques_{n//100}.png", "Training Loss", fig_2)
+                batch_noise = torch.normal(mean=0.0, std=noise_std, #std=0.001
+                                        size=(batch_state.size()[0], encoded_space_dim)
+                                        ).to(device).float()
+                batch_state_noise = batch_state + batch_noise
             
-    plt.close('all')
+                optimizer.zero_grad()
+                if use_baseline:
+                    nn_input = torch.cat((batch_target_repr, batch_state_noise), dim=1)
+                    batch_action_pred_noise = model(nn_input)
+                else:
+                    batch_action_pred_noise , batch_x_des_noise, \
+                        batch_diff_noise  = model(batch_target_repr, batch_state_noise)
+
+                # TODO: Think about it.
+                batch_action_noise = batch_action - batch_noise[:, :joints_num]
+
+                if use_custom_loss:
+                    # loss_custom, loss_torques = criterion(batch_action_pred_noise, batch_action_noise, 
+                    #                                       batch_x_des_noise, batch_state, batch_step)
+                    loss_custom, loss_torques = criterion(batch_action_pred_noise, batch_action_noise, 
+                                                        batch_x_des_noise, batch_state)
+                else:
+                    loss_torques = criterion(batch_action_pred_noise, batch_action_noise)
+                    loss_custom = loss_torques
+
+                loss_custom.backward()
+                optimizer.step()
+
+                train_loss_custom += loss_custom.item() #* batch_action.size(0)
+                train_loss_torques += loss_torques.item() #* batch_action.size(0)
+            
+            train_loss_custom /= len(train_dataloader.dataset)
+            train_losses_custom.append(train_loss_custom**0.5)
+            train_loss_torques /= len(train_dataloader.dataset)
+            train_losses_torques.append(train_loss_torques**0.5)
+            end_time = time.time()
+            
+            # scheduler.step()
+            if n % validation_interval == 0:
+                epoch_time = end_time - start_time
+                print(f"Last epoch taken time: {epoch_time:.3f} seconds")
+
+                act_abs_diff = torch.abs(batch_action_pred_noise - batch_action)
+                mean_abs_diff = torch.mean(act_abs_diff, dim=0)
+                for k in range(7):
+                    train_info[f'mae_joint_{k+1}_train'].append(mean_abs_diff[k].item())
+
+                run_test(n)
+
+                # input_independent_baseline(dataset, selected_train_idx)
+                # prediction_dynamics(dataset, selected_val_ind)
+
+                weight_file_path = os.path.join(weights_storage_root_dir, f"fbc_{n}.pth")
+                torch.save(model.state_dict(), weight_file_path)
+
+                info_file_path = os.path.join(weights_storage_root_dir, f"info.pickle")
+                with open(info_file_path, 'wb') as handle:
+                    pickle.dump(train_info, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+                visualize_losses(train_losses_custom, val_losses_custom, n, 
+                                f"loss_custom_{n//100}.png", "Custom Loss", fig_1)
+                visualize_losses(train_losses_torques, val_losses_torques, n, 
+                                f"loss_torques_{n//100}.png", "Training Loss", fig_2)
+                
+        plt.close('all')
 
