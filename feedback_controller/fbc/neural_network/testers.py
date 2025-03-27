@@ -22,8 +22,9 @@ class Tester():
         self.cur_file_dir_path = os.path.dirname(__file__)
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-        self.load_model(train_no=0, epoch_no=0, 
-                        use_custom_loss=self.config.use_custom_loss)
+        # self.load_model(train_no=0, epoch_no=0, 
+        #                 use_custom_loss=self.config.use_custom_loss,
+        #                 model_complexity='high')
         
         dataset_path = os.path.join(self.cur_file_dir_path, 
                                     f'data/torobo/{self.config.dataset_name}/{self.config.ds_test_file}')
@@ -35,23 +36,33 @@ class Tester():
         self.criterion = nn.L1Loss()
         self.criterion_mse = nn.MSELoss(reduction='sum')
 
-    def load_model(self, train_no, epoch_no, use_custom_loss):
+    def load_model(self, train_no, epoch_no, use_custom_loss, model_complexity):
+
+        enc_hid, cont_hid, lin_hid, lin_out = self.config.get_model_dims(model_complexity)
+        self.model = GeneralModel(self.state_size, self.target_size+self.onehot_size, 
+                                  self.joint_size,
+                                  enc_hid, cont_hid, 
+                                  use_image=False)
+        self.baseline = MLPBaseline(self.state_size + (self.target_size+self.onehot_size),
+                                    lin_hid, lin_out,
+                                    self.joint_size)
+        
+        m = self.model.to(self.device)
         model_name_dnfc = self.config.get_model_name(False, use_custom_loss, False)
-        model_name_dnfc = self.config.add_params_to_name(model_name_dnfc, False)
+        # model_name_dnfc = self.config.add_params_to_name(model_name_dnfc, m)
+        num_params = self.config.get_params_num(m)
+        model_name_dnfc += f"|{num_params}K_params"
+
+        m = self.baseline.to(self.device)
         model_name_base = self.config.get_model_name(True, False, False)
-        model_name_base = self.config.add_params_to_name(model_name_base, True)
+        # model_name_base = self.config.add_params_to_name(model_name_base, m)
+        num_params = self.config.get_params_num(m)
+        model_name_base += f"|{num_params}K_params"
 
         dnfc_adr = f'weights/{self.config.dataset_name}|{self.config.ds_ratio}|{model_name_dnfc}' + \
             f'/train_no_{train_no}/fbc_{epoch_no}.pth'
         base_adr = f'weights/{self.config.dataset_name}|{self.config.ds_ratio}|{model_name_base}' + \
             f'/train_no_{train_no}/fbc_{epoch_no}.pth'
-
-        self.model = GeneralModel(self.state_size, self.target_size+self.onehot_size, 
-                                  self.joint_size, use_image=False)
-        self.baseline = MLPBaseline(self.state_size + (self.target_size+self.onehot_size), 
-                                    self.joint_size)
-        m = self.model.to(self.device)
-        m = self.baseline.to(self.device)
 
         dnfc_path = os.path.join(self.cur_file_dir_path, dnfc_adr)
         base_path = os.path.join(self.cur_file_dir_path, base_adr)

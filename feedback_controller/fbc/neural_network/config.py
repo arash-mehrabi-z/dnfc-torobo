@@ -1,7 +1,7 @@
 class Config:
     def __init__(self):
         # Custom Loss:
-        self.use_custom_loss = False
+        self.use_custom_loss = True
         self.num_steps = 299
         self.C = 1e-5
 
@@ -21,12 +21,11 @@ class Config:
         self.state_dim = 2*self.joints_num
         self.coords_dim = 3*3
         self.action_dim = self.joints_num
-
         self.onehot_dim = 4
         self.step_dim = 1
 
-        self.num_params = 24.085 #6.037 #36.117
-        self.num_params_base = 24.091 #6.039 #36.109
+        # self.num_params = 24.085 #6.037 #36.117
+        # self.num_params_base = 24.091 #6.039 #36.109
 
         
     def get_model_name(self, use_baseline, use_custom_loss, use_image):
@@ -41,13 +40,23 @@ class Config:
         return model_name
     
     
-    def add_params_to_name(self, name, use_baseline):
-        if use_baseline:
-            num_params = self.num_params_base
-        else:
-            num_params = self.num_params
-        name += f"|{num_params}K_params"
-        return name
+    # def add_params_to_name(self, name, model):
+    #     num_params = sum(p.numel() for p in model.parameters())/1e3
+    #     name += f"|{num_params}K_params"
+    #     return name
+    
+        # if use_baseline:
+        #     num_params = self.num_params_base
+        # else:
+        #     num_params = self.num_params
+        # name += f"|{num_params}K_params"
+        # return name
+
+    
+    def get_params_num(self, model):
+        num_params = sum(p.numel() for p in model.parameters())/1e3
+        return num_params
+    
 
     def get_model_dims(self, model_complexity):
         if model_complexity == 'low':
