@@ -12,6 +12,7 @@ class CustomLoss(nn.Module):
 
     def forward(self, action_predicted, action_ground_truth, x_des, x_t):
         loss_torques = self.criterion(action_predicted, action_ground_truth)
+        
         x_des = x_des[:, :7]
         x_t = x_t[:, :7]
         # print(x_des.shape, x_t.shape)

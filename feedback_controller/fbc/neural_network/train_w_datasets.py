@@ -264,7 +264,7 @@ num_epochs = 4000 + 1
 batch_size = 128
 learning_rate = 3e-4
 validation_interval = 100
-num_trains = 5
+num_trains = 10
 noise_std = 0.004
 
 if use_baseline:
@@ -293,6 +293,8 @@ for model_complexity in ['low', 'medium', 'high']:
         val_indices = split['val_indices']
         train_set = Subset(dataset, train_indices)
         val_set = Subset(dataset, val_indices)
+        print(f"First five train_indices: {train_indices[:5]}")
+        print(f"First five val_indices: {val_indices[:5]}")
         print("train_set:", len(train_set))
         print("val_set:", len(val_set))
 
