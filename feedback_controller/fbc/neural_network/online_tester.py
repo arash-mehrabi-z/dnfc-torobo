@@ -291,10 +291,10 @@ def create_results_dir(params_num):
     global epoch_no
 
     results_file = f'results/{config.dataset_name}_{params_num}K_{config.ds_ratio}'
-    results_file += f'/ep:{epoch_no}/on_{config.v_name}_{config.C}_{config.use_custom_loss}_{config.v_name_base}'
+    results_file += f'/ep:{epoch_no}/on_{config.v_name}_{config.C}_{config.use_custom_loss}_{config.v_name_base}TEST'
     results_dir = os.path.join(cur_file_dir_path, results_file)
     if os.path.exists(results_dir):
-        raise Exception("Result dir. exists. Are you testing again?")
+        raise Exception(f"Result dir. exists. Are you testing again? Result dir: {results_dir}")
     else:
         os.makedirs(results_dir)
     print("results_dir", results_dir)
