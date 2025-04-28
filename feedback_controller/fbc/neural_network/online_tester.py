@@ -291,7 +291,7 @@ def create_results_dir(params_num):
     global epoch_no
 
     results_file = f'results/{config.dataset_name}_{params_num}K_{config.ds_ratio}'
-    results_file += f'/ep:{epoch_no}/on_{config.v_name}_{config.C}_{config.use_custom_loss}_{config.v_name_base}TEST'
+    results_file += f'/ep:{epoch_no}/on_{config.v_name}_{config.C}_{config.use_custom_loss}_{config.v_name_base}'
     results_dir = os.path.join(cur_file_dir_path, results_file)
     if os.path.exists(results_dir):
         raise Exception(f"Result dir. exists. Are you testing again? Result dir: {results_dir}")
@@ -314,7 +314,7 @@ kin = TorKin()
 
 use_only_dnfc = False
 epoch_no = 4000 #2000
-train_num = 5
+train_num = 10
 
 for model_complexity in ['low', 'medium', 'high']:
     # enc_hid, cont_hid, lin_hid, lin_out = config.get_model_dims(model_complexity)
