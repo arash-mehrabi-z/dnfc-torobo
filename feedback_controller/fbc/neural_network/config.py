@@ -11,11 +11,11 @@ class Config:
         self.episodes_num_ds = 72 #360 #500
         self.dataset_name = f"trajs:{self.episodes_num_ds}_blocks:3" +\
             "_triangle_v_scarce" #"_triangle_portion_v" #"_random"
-        self.ds_ratio = "interp_0.85" #"interp_0.8" #0.263
+        self.ds_ratio = "extrap_0.85" #"interp_0.8" #0.263
         self.ds_file_name = f'train_{self.ds_ratio}.npy'
-        self.ds_ratio_test = "interp_0.85" #"interp_0.8" #"0.8"
+        self.ds_ratio_test = self.ds_ratio #"interp_0.85"
         self.ds_test_file = f'test_{self.ds_ratio_test}.npy'
-        self.train_val_file = f'split_indices_interp_0.85.pt'
+        self.train_val_file = f'split_indices_{self.ds_ratio}.pt'
 
         self.joints_num = 7
         self.state_dim = 2*self.joints_num
