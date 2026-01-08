@@ -5,7 +5,7 @@ class Config:
         self.num_steps = 299
         self.C = 1e-5
 
-        self.v_name = "2+2l_lat:sub-nvel" #"6l_linear" #"v_custl_mse"
+        self.v_name = "2+2l_lat:sub-nvel" #+ "_freeze" #"6l_linear" #"v_custl_mse"
         self.v_name_base = "3l_base" #"4l_base" 
 
         self.episodes_num_ds = 72 #500 #360 #2000

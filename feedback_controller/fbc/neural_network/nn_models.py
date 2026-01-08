@@ -186,6 +186,8 @@ class GeneralModel(nn.Module):
         else:
             self.enc1 = MLP_2L(target_dim, enc_hid, encoded_space_dim)
             # self.enc2 = MLP_3L(256, 256, 128, encoded_space_dim)
+            for param in self.enc1.parameters():
+                param.requires_grad = False
 
         self.mlp_controller = MLP_2L(encoded_space_dim, cont_hid, action_dim)
         # self.mlp_controller2 = MLP_2L(96, 32, action_dim)
