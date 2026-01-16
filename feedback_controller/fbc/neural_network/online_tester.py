@@ -18,6 +18,8 @@ import csv
 import pickle
 # from tslearn.metrics import dtw_path
 from dtw import *
+from diffusion_dataset import normalize_data, unnormalize_data
+import collections
 
 plt.switch_backend('agg')
 
@@ -134,6 +136,150 @@ def online_test(tester:Tester, eps_num, use_baseline):
 
     # all_trajs_point += traj_point
     return all_joints, traj_point, latent_reps, all_states #all_trajs_point
+
+
+def online_test_diffusion(tester:Tester, eps_num):
+    """Online test using diffusion policy with real robot"""
+    joint_size = tester.joint_size
+    state_size = tester.state_size
+    step_size = tester.step_size
+    target_size = tester.target_size
+    onehot_size = tester.onehot_size
+    traj_step_size = 900
+
+    elem = tester.dataset[eps_num]
+    state = torch.tensor(
+        elem[0][step_size : step_size + state_size].tolist()
+    ).to(device)
+
+    one_hot = elem[0][step_size+state_size+target_size :
+                      step_size+state_size+target_size+onehot_size].tolist()
+    goal = elem[0][step_size+state_size :
+                   step_size+state_size+target_size].tolist()
+
+    obstA = torch.tensor(goal[0:3])
+    obstB = torch.tensor(goal[3:6])
+    obstC = torch.tensor(goal[6:9])
+    grepB = [obstB[0], obstB[1], 0.87]
+    putB = [obstA[0], obstA[1], 0.9]
+    grepC = [obstC[0], obstC[1], 0.87]
+    putC = [obstA[0], obstA[1], 0.93]
+
+    print("Points")
+    print(obstA)
+    print(obstB)
+    print(obstC)
+
+    # Setup robot environment
+    comm.move('point1', obstA)
+    comm.move('point2', obstB)
+    comm.move('point3', obstC)
+    comm.create_and_pub_msg(state[:7])
+    rospy.sleep(5)
+
+    # Initialize observation deque
+    obs = torch.cat([
+        state,
+        torch.tensor(goal + one_hot).to(device)
+    ])
+    obs_deque = collections.deque(
+        [obs] * tester.config.obs_horizon,
+        maxlen=tester.config.obs_horizon
+    )
+
+    traj_point = 0
+    all_joints = []
+    all_states = []
+
+    tester.diffusion_model.eval()
+    action_buffer = None
+    action_buffer_idx = 0
+
+    with torch.no_grad():
+        for i in range(traj_step_size):
+            comm.which(f'\n diffusion policy on step {i}\n')
+
+            # Get new action sequence if needed
+            if action_buffer is None or action_buffer_idx >= tester.config.action_horizon:
+                # Stack observation history and normalize
+                obs_seq = torch.stack(list(obs_deque))  # (obs_horizon, obs_dim)
+                obs_seq_np = obs_seq.cpu().numpy()
+
+                # Normalize observation using dataset stats
+                obs_seq_norm = normalize_data(obs_seq_np, tester.diffusion_dataset.stats['obs'])
+                obs_seq_norm = torch.from_numpy(obs_seq_norm).to(device).float()
+                obs_seq_norm = obs_seq_norm.unsqueeze(0)  # (1, obs_horizon, obs_dim)
+
+                # Get action sequence from diffusion model
+                action_seq_norm = tester.diffusion_model.get_action(obs_seq_norm)
+                action_seq_norm = action_seq_norm.squeeze(0).cpu().numpy()
+
+                # Unnormalize action
+                action_seq = unnormalize_data(action_seq_norm, tester.diffusion_dataset.stats['action'])
+                action_seq = torch.from_numpy(action_seq).to(device)
+
+                # Extract actions to execute
+                start_idx = tester.config.obs_horizon - 1
+                end_idx = start_idx + tester.config.action_horizon
+                action_buffer = action_seq[start_idx:end_idx, :]
+                action_buffer_idx = 0
+
+            # Execute action
+            action = action_buffer[action_buffer_idx]
+            action_buffer_idx += 1
+
+            state[:7] += (5 * action)
+
+            # Send to robot
+            comm.create_and_pub_msg(state[:7])
+            rospy.sleep(0.05)
+
+            # Get actual joint state from robot
+            comm.jsLock.acquire()
+            js = torch.tensor((list(comm.joint_state))).to(device)
+            comm.jsLock.release()
+
+            state = torch.cat((js, action), dim=0).to(device)
+            all_joints.append(state[:7])
+            all_states.append(state.tolist())
+
+            # Update observation
+            goal_tensor = torch.tensor(goal + one_hot).to(device)
+            obs = torch.cat([state, goal_tensor])
+            obs_deque.append(obs)
+
+            # Update object positions in simulator
+            pos = tester.get_end_eff(js.tolist())
+            if one_hot[0]==1:
+                pos[2] -= 0.02
+                comm.move('point2', pos)
+            elif one_hot[2]==1:
+                pos[2] -= 0.02
+                comm.move('point3', pos)
+
+            # Check milestones
+            if traj_point==0 and tester.close_enough(state, grepB):
+                traj_point = 1
+                one_hot = [1, 0, 0, 0]
+                action_buffer = None  # Force replanning
+                print('here1', i)
+            elif traj_point==1 and tester.close_enough(state, putB):
+                traj_point = 2
+                one_hot = [0, 1, 0, 0]
+                action_buffer = None
+                print('here2', i)
+            elif traj_point==2 and tester.close_enough(state, grepC):
+                traj_point = 3
+                one_hot = [0, 0, 1, 0]
+                action_buffer = None
+                print('here3', i)
+            elif traj_point==3 and tester.close_enough(state, putC):
+                traj_point = 4
+                one_hot = [0, 0, 0, 1]
+                action_buffer = None
+                print('here4', i)
+
+    return all_joints, traj_point, [], all_states
 
 def get_dtw_metric(coords_dnfc, coords_basel, coords_gtruth):
     x_dnfc, y_dnfc, z_dnfc = coords_dnfc
@@ -313,10 +459,10 @@ tester = Tester()
 kin = TorKin()
 
 use_only_dnfc = False
-epoch_no = 4000 #4000
-train_num = 10
+epoch_no = 10000 #4000
+train_num = 1 #10
 
-for model_complexity in ['low', 'medium', 'high', 'xhigh']: #['medium']:
+for model_complexity in ['medium']: #['low', 'medium', 'high', 'xhigh']: #['medium']:
     # enc_hid, cont_hid, lin_hid, lin_out = config.get_model_dims(model_complexity)
     tester.load_model(0, 0, config.use_custom_loss, model_complexity)
     params_num = tester.config.get_params_num(tester.model)

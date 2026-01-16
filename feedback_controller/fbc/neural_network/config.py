@@ -6,7 +6,7 @@ class Config:
         self.C = 1e-5
 
         self.v_name = "2+2l_lat:sub-nvel" #"6l_linear" #"v_custl_mse"
-        self.v_name_base = "3l_base" #"4l_base" 
+        self.v_name_base = "3l_base" #"4l_base"
 
         self.episodes_num_ds = 72 #500 #360 #2000
         self.dataset_name = f"trajs:{self.episodes_num_ds}_blocks:3" +\
@@ -24,19 +24,33 @@ class Config:
         self.onehot_dim = 4
         self.step_dim = 1
 
+        # Diffusion Policy parameters
+        self.use_diffusion = True  # Flag to enable diffusion policy
+        self.obs_horizon = 2  # Number of past observations to condition on
+        self.pred_horizon = 16  # Number of future actions to predict
+        self.action_horizon = 8  # Number of actions to execute before replanning
+        self.num_diffusion_iters_train = 100  # Diffusion iterations during training
+        self.num_diffusion_iters_inference = 100  # Diffusion iterations during inference
+        self.diffusion_beta_schedule = 'squaredcos_cap_v2'  # Noise schedule
+        self.v_name_diffusion = "diffusion_pol"
+
         # self.num_params = 24.085 #6.037 #36.117
         # self.num_params_base = 24.091 #6.039 #36.109
 
         
-    def get_model_name(self, use_baseline, use_custom_loss, use_image):
-        if use_custom_loss: 
+    def get_model_name(self, use_baseline, use_custom_loss, use_image, use_diffusion=False):
+        if use_diffusion:
+            model_name = f"{self.v_name_diffusion}|oh:{self.obs_horizon}|ph:{self.pred_horizon}|ah:{self.action_horizon}"
+        elif use_custom_loss:
             model_name = f"cus_los_{self.C}"
             # model_name = f"cus_los_const_mse_st"
         else: model_name = "mse_los"
-        if use_image: model_name += "|tar_img"
-        else: model_name += "|tar_cart"
-        if use_baseline: model_name += f"|base|{self.v_name_base}"
-        else: model_name += f"|{self.v_name}"
+
+        if not use_diffusion:
+            if use_image: model_name += "|tar_img"
+            else: model_name += "|tar_cart"
+            if use_baseline: model_name += f"|base|{self.v_name_base}"
+            else: model_name += f"|{self.v_name}"
         return model_name
     
     
@@ -81,5 +95,19 @@ class Config:
             lin_out = int(192 * 2.7)
         else:
             raise Exception("Model complexity is not defined.")
-        
+
         return enc_hid, cont_hid, lin_hid, lin_out
+
+    def get_diffusion_dims(self, model_complexity):
+        """Returns down_dims for diffusion U-Net based on complexity"""
+        if model_complexity == 'low':
+            down_dims = [128, 256, 512]
+        elif model_complexity == 'medium':
+            down_dims = [256, 512, 1024]
+        elif model_complexity == 'high':
+            down_dims = [512, 1024, 2048]
+        elif model_complexity == 'xhigh':
+            down_dims = [512, 1024, 2048, 4096]
+        else:
+            raise Exception("Model complexity is not defined.")
+        return down_dims
