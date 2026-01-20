@@ -444,7 +444,7 @@ class Tester():
 
     def load_diffusion_model(self, train_no, epoch_no, model_complexity):
         """Load a trained diffusion policy model"""
-        down_dims = self.config.get_diffusion_dims(model_complexity)
+        down_dims, step_embed_dim, n_groups = self.config.get_diffusion_dims(model_complexity)
         obs_dim = self.config.state_dim + self.config.coords_dim + self.config.onehot_dim
 
         self.diffusion_model = DiffusionPolicyModel(
@@ -454,7 +454,9 @@ class Tester():
             pred_horizon=self.config.pred_horizon,
             action_horizon=self.config.action_horizon,
             num_diffusion_iters=self.config.num_diffusion_iters_inference,
-            down_dims=down_dims
+            down_dims=down_dims,
+            diffusion_step_embed_dim=step_embed_dim,
+            n_groups=n_groups
         )
 
         model_name = self.config.get_model_name(

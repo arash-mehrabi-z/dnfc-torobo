@@ -437,7 +437,7 @@ def create_results_dir(params_num):
     global epoch_no
 
     results_file = f'results/{config.dataset_name}_{params_num}K_{config.ds_ratio}'
-    results_file += f'/ep:{epoch_no}/on_{config.v_name}_{config.C}_{config.use_custom_loss}_{config.v_name_base}'
+    results_file += f'/ep:{epoch_no}/on_{config.v_name_diffusion}_{config.C}_{config.use_custom_loss}_{config.v_name_base}'
     results_dir = os.path.join(cur_file_dir_path, results_file)
     if os.path.exists(results_dir):
         raise Exception(f"Result dir. exists. Are you testing again? Result dir: {results_dir}")
@@ -458,54 +458,38 @@ def create_results_dir(params_num):
 tester = Tester()
 kin = TorKin()
 
-use_only_dnfc = False
-epoch_no = 10000 #4000
+epoch_no = 4000 #4000
 train_num = 1 #10
 
-for model_complexity in ['medium']: #['low', 'medium', 'high', 'xhigh']: #['medium']:
-    # enc_hid, cont_hid, lin_hid, lin_out = config.get_model_dims(model_complexity)
-    tester.load_model(0, 0, config.use_custom_loss, model_complexity)
-    params_num = tester.config.get_params_num(tester.model)
+for model_complexity in ['minimal']: #['low', 'medium', 'high', 'xhigh']:
+    tester.load_diffusion_model(0, epoch_no, model_complexity)
+    params_num = tester.config.get_params_num(tester.diffusion_model)
     results_dir = create_results_dir(params_num)
 
-    all_states_dnfc = []
-    all_states_base = []
-    all_latent_reps = []
-    for eps_num in range(len(tester.dataset)): #random_idx: #range(27, 110):
+    all_states_diffusion = []
+    for eps_num in range(len(tester.dataset)):
         for i_train in range(train_num):
-            tester.load_model(i_train, epoch_no, config.use_custom_loss, model_complexity)
+            tester.load_diffusion_model(i_train, epoch_no, model_complexity)
             rospy.init_node('denz')
-            print('waining for DNFC')
-            comm.which('\n\n\n\ndnfc start on path'+str(eps_num)+'\n\n\n\n')
-            all_joints_dnfc, loss_dnfc, latent_reps, states_dnfc = online_test(tester, eps_num, False)
+            print('waiting for Diffusion Policy')
+            comm.which('\n\n\n\ndiffusion start on path'+str(eps_num)+'\n\n\n\n')
+            all_joints_diff, loss_diff, _, states_diff = online_test_diffusion(tester, eps_num)
 
-            if use_only_dnfc:
-                all_joints_base, loss_basel, _, states_base = all_joints_dnfc, loss_dnfc, latent_reps, states_dnfc
-            else:
-                print('waining for baseline')
-                comm.which('\n\n\n\nbaseline start on path'+str(eps_num)+'\n\n\n\n')
-                all_joints_base, loss_basel, _, states_base = online_test(tester, eps_num, True)
-
-            coords_dnfc = intrinsic_to_3d_cart(all_joints_dnfc)
-            coords_basel = intrinsic_to_3d_cart(all_joints_base)
+            coords_diff = intrinsic_to_3d_cart(all_joints_diff)
             coords_gtruth = tester.get_real_coordinates(eps_num)
 
-            dtw_dnfc, dtw_basel, dtw_norm_dnfc, dtw_norm_basel = get_dtw_metric(
-                coords_dnfc, coords_basel, coords_gtruth)
+            # Use diffusion coords for both to maintain compatibility with plot_results
+            dtw_diff, _, dtw_norm_diff, _ = get_dtw_metric(
+                coords_diff, coords_diff, coords_gtruth)
 
-            plot_results(tester, coords_dnfc, coords_basel, coords_gtruth, 
+            plot_results(tester, coords_diff, coords_diff, coords_gtruth,
                         eps_num, i_train, results_dir)
-            
-            dnfc_succ = loss_dnfc / 4
-            basel_succ = loss_basel / 4
 
-            log_loss(eps_num, dnfc_succ, basel_succ, dtw_dnfc, dtw_basel, 
-                    dtw_norm_dnfc, dtw_norm_basel, results_dir, "perf.csv")
-            plot_latent_reps(latent_reps, states_dnfc, results_dir, 
-                            eps_num, i_train)
-            store_states(states_dnfc, states_base, latent_reps)
+            diff_succ = loss_diff / 4
 
-    save_list_to_file(all_states_dnfc, results_dir, "all_states_dnfc")
-    save_list_to_file(all_states_base, results_dir, "all_states_base")
-    save_list_to_file(all_latent_reps, results_dir, "all_latent_reps")
+            log_loss(eps_num, diff_succ, diff_succ, dtw_diff, dtw_diff,
+                    dtw_norm_diff, dtw_norm_diff, results_dir, "perf.csv")
+            all_states_diffusion.append(states_diff)
+
+    save_list_to_file(all_states_diffusion, results_dir, "all_states_diffusion")
 

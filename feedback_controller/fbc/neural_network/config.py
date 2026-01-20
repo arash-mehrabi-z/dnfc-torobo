@@ -26,7 +26,7 @@ class Config:
 
         # Diffusion Policy parameters
         self.use_diffusion = True  # Flag to enable diffusion policy
-        self.obs_horizon = 2  # Number of past observations to condition on
+        self.obs_horizon = 1  # Number of past observations to condition on (1 = like MLP)
         self.pred_horizon = 16  # Number of future actions to predict
         self.action_horizon = 8  # Number of actions to execute before replanning
         self.num_diffusion_iters_train = 100  # Diffusion iterations during training
@@ -99,15 +99,28 @@ class Config:
         return enc_hid, cont_hid, lin_hid, lin_out
 
     def get_diffusion_dims(self, model_complexity):
-        """Returns down_dims for diffusion U-Net based on complexity"""
-        if model_complexity == 'low':
+        """Returns (down_dims, step_embed_dim, n_groups) for diffusion U-Net based on complexity"""
+        if model_complexity == 'minimal':
+            # Minimal model: ~25K params to match MLP baseline
+            down_dims = [16, 32]
+            step_embed_dim = 16
+            n_groups = 4
+        elif model_complexity == 'low':
             down_dims = [128, 256, 512]
+            step_embed_dim = 128
+            n_groups = 8
         elif model_complexity == 'medium':
             down_dims = [256, 512, 1024]
+            step_embed_dim = 256
+            n_groups = 8
         elif model_complexity == 'high':
             down_dims = [512, 1024, 2048]
+            step_embed_dim = 256
+            n_groups = 8
         elif model_complexity == 'xhigh':
             down_dims = [512, 1024, 2048, 4096]
+            step_embed_dim = 256
+            n_groups = 8
         else:
             raise Exception("Model complexity is not defined.")
-        return down_dims
+        return down_dims, step_embed_dim, n_groups

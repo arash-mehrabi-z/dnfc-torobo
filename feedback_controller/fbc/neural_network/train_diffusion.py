@@ -35,7 +35,7 @@ action_dim = joints_num
 obs_dim = config.state_dim + config.coords_dim + config.onehot_dim
 
 # Training settings
-num_epochs = 10000 + 1
+num_epochs = 20000 + 1
 batch_size = 256
 learning_rate = 1e-4
 weight_decay = 1e-6
@@ -178,8 +178,8 @@ def create_csv_files(weights_storage_root_dir):
 
 
 # Main training loop
-for model_complexity in ['medium']: #['low', 'medium', 'high', 'xhigh']:
-    down_dims = config.get_diffusion_dims(model_complexity)
+for model_complexity in ['minimal']: #['low', 'medium', 'high', 'xhigh']:
+    down_dims, step_embed_dim, n_groups = config.get_diffusion_dims(model_complexity)
 
     for i_train in range(num_trains):
         fig = plt.figure(figsize=(12.8, 9.6))
@@ -214,7 +214,9 @@ for model_complexity in ['medium']: #['low', 'medium', 'high', 'xhigh']:
             pred_horizon=config.pred_horizon,
             action_horizon=config.action_horizon,
             num_diffusion_iters=config.num_diffusion_iters_train,
-            down_dims=down_dims
+            down_dims=down_dims,
+            diffusion_step_embed_dim=step_embed_dim,
+            n_groups=n_groups
         )
         model = model.to(device)
 
@@ -281,11 +283,13 @@ for model_complexity in ['medium']: #['low', 'medium', 'high', 'xhigh']:
         # Training loop
         for n in range(num_epochs):
             if n == 0:
-                # Initial validation
+                # Initial validation using EMA weights
+                ema.store(model.noise_pred_net.parameters())
                 ema.copy_to(model.noise_pred_net.parameters())
                 val_loss = validate_epoch(model, val_dataloader, device)
                 val_losses.append(val_loss**0.5)
                 log_loss(n, train_loss, val_loss, weights_storage_root_dir)
+                ema.restore(model.noise_pred_net.parameters())
 
             start_time = time.time()
             train_loss = train_epoch(model, train_dataloader, optimizer,
@@ -297,19 +301,23 @@ for model_complexity in ['medium']: #['low', 'medium', 'high', 'xhigh']:
                 epoch_time = end_time - start_time
                 print(f"Last epoch taken time: {epoch_time:.3f} seconds")
 
-                # Copy EMA weights for validation
+                # Store original weights, copy EMA for validation/saving
+                ema.store(model.noise_pred_net.parameters())
                 ema.copy_to(model.noise_pred_net.parameters())
 
-                # Run validation
+                # Run validation with EMA weights
                 val_loss = validate_epoch(model, val_dataloader, device)
                 val_losses.append(val_loss**0.5)
 
                 log_loss(n, train_loss, val_loss, weights_storage_root_dir)
 
-                # Save checkpoint
+                # Save checkpoint (saves EMA weights)
                 weight_file_path = os.path.join(weights_storage_root_dir,
                                                f"fbc_{n}.pth")
                 torch.save(model.state_dict(), weight_file_path)
+
+                # Restore original weights for continued training
+                ema.restore(model.noise_pred_net.parameters())
 
                 # Visualize losses
                 visualize_losses(train_losses, val_losses, n,
