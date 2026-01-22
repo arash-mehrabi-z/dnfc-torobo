@@ -24,9 +24,9 @@ class Config:
         self.onehot_dim = 4
         self.step_dim = 1
 
-        # Diffusion Policy parameters
+        # Diffusion Policy parameters (shared)
         self.use_diffusion = True  # Flag to enable diffusion policy
-        self.obs_horizon = 1  # Number of past observations to condition on (1 = like MLP)
+        self.obs_horizon = 2  # Number of past observations to condition on (1 = like MLP)
         self.pred_horizon = 16  # Number of future actions to predict
         self.action_horizon = 8  # Number of actions to execute before replanning
         self.num_diffusion_iters_train = 100  # Diffusion iterations during training
@@ -34,12 +34,17 @@ class Config:
         self.diffusion_beta_schedule = 'squaredcos_cap_v2'  # Noise schedule
         self.v_name_diffusion = "diffusion_pol"
 
+        # Transformer Diffusion Policy parameters
+        self.v_name_diffusion_transformer = "diffusion_transformer"
+
         # self.num_params = 24.085 #6.037 #36.117
         # self.num_params_base = 24.091 #6.039 #36.109
 
         
-    def get_model_name(self, use_baseline, use_custom_loss, use_image, use_diffusion=False):
-        if use_diffusion:
+    def get_model_name(self, use_baseline, use_custom_loss, use_image, use_diffusion=False, use_transformer=False):
+        if use_diffusion and use_transformer:
+            model_name = f"{self.v_name_diffusion_transformer}|oh:{self.obs_horizon}|ph:{self.pred_horizon}|ah:{self.action_horizon}"
+        elif use_diffusion:
             model_name = f"{self.v_name_diffusion}|oh:{self.obs_horizon}|ph:{self.pred_horizon}|ah:{self.action_horizon}"
         elif use_custom_loss:
             model_name = f"cus_los_{self.C}"
@@ -124,3 +129,40 @@ class Config:
         else:
             raise Exception("Model complexity is not defined.")
         return down_dims, step_embed_dim, n_groups
+
+    def get_transformer_diffusion_dims(self, model_complexity):
+        """Returns (n_layer, n_head, n_emb, p_drop_attn, n_cond_layers) for transformer diffusion based on complexity"""
+        if model_complexity == 'minimal':
+            # Minimal model: ~25K params to match MLP baseline
+            n_layer = 2
+            n_head = 2
+            n_emb = 64
+            p_drop_attn = 0.1
+            n_cond_layers = 0
+        elif model_complexity == 'low':
+            n_layer = 4
+            n_head = 4
+            n_emb = 128
+            p_drop_attn = 0.1
+            n_cond_layers = 0
+        elif model_complexity == 'medium':
+            n_layer = 8
+            n_head = 4
+            n_emb = 256
+            p_drop_attn = 0.1
+            n_cond_layers = 0
+        elif model_complexity == 'high':
+            n_layer = 12
+            n_head = 8
+            n_emb = 512
+            p_drop_attn = 0.1
+            n_cond_layers = 2
+        elif model_complexity == 'xhigh':
+            n_layer = 12
+            n_head = 12
+            n_emb = 768
+            p_drop_attn = 0.1
+            n_cond_layers = 4
+        else:
+            raise Exception("Model complexity is not defined.")
+        return n_layer, n_head, n_emb, p_drop_attn, n_cond_layers

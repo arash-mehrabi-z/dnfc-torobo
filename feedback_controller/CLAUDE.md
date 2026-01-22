@@ -4,254 +4,190 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-This is a robotics research project implementing **Desired Neural Feedback Control (DNFC)** for the Torobo humanoid robot. The codebase trains neural network controllers that map from desired task coordinates and current robot state to joint velocities, using a custom loss function that incorporates both action prediction error and latent state representation error.
+Robotics research project implementing **Desired Neural Feedback Control (DNFC)** for the Torobo humanoid robot. Trains neural network controllers that map from desired task coordinates + robot state → joint velocities.
 
-## High-Level Architecture
+## Architecture
 
-### Core Concept
-- **Input**: Target Cartesian coordinates (x,y,z for 3 objects A,B,C) + one-hot encoded task phase + current robot state (joint positions & velocities for 7 joints)
-- **Models**:
-  1. **DNFC (Desired Neural Feedback Control)**: Two-stage architecture
-     - Encoder MLP: Maps target representation to latent space (matching state dimensionality: 14D for 7 joints × 2)
-     - Controller MLP: Maps latent error (desired - current state) to joint velocity commands
-  2. **MLP Baseline**: Direct MLP mapping from concatenated inputs to actions
-  3. **Diffusion Policy Baseline** (NEW): Conditional denoising diffusion model
-     - 1D U-Net noise prediction network with FiLM conditioning
-     - Predicts action sequences (16 steps) using receding horizon control
-     - Conditions on observation history (2 timesteps)
-     - Uses iterative denoising (100 steps) during inference
-- **Training**:
-  - DNFC: Custom loss combining MSE on actions with MSE on latent representations (weighted by constant C)
-  - Baselines: MSE on actions only
-  - Diffusion: MSE on noise prediction with DDPM scheduler
+### Models
 
-### Key Components
+| Model | Architecture | Prediction | Use Case |
+|-------|--------------|------------|----------|
+| **DNFC** | Encoder MLP → Controller MLP | Single action (7D) | Fast reactive control |
+| **MLP Baseline** | Direct MLP | Single action (7D) | Simple baseline |
+| **Diffusion Policy (U-Net)** | 1D U-Net + DDPM | Action sequence (16×7D) | Smooth multi-step plans |
+| **Diffusion Policy (Transformer)** | Transformer Encoder-Decoder + DDPM | Action sequence (16×7D) | Attention-based multi-step plans |
 
-**Configuration** ([config.py](fbc/neural_network/config.py)):
-- Centralized configuration for dataset names, model variants, loss parameters
-- Model complexity levels: low/medium/high/xhigh (controls hidden layer sizes)
-- Dataset paths follow pattern: `trajs:{num}_blocks:3_triangle_v_scarce` or `_random`
+**DNFC (Desired Neural Feedback Control)**:
+- Encoder: target representation → latent space (14D: 7 joint pos + 7 vel)
+- Controller: latent error (desired - current) → joint velocity
+- Custom loss: MSE(actions) + C × MSE(latent representations)
 
-**Neural Models** ([nn_models.py](fbc/neural_network/nn_models.py), [diffusion_models.py](fbc/neural_network/diffusion_models.py)):
-- `GeneralModel`: DNFC architecture with encoder + controller
-- `MLPBaseline`: Direct state-to-action mapping for comparison
-- `DiffusionPolicyModel` (NEW): Diffusion-based sequence prediction model
-  - `ConditionalUnet1D`: 1D U-Net noise prediction network
-  - `DDPMScheduler`: Denoising diffusion probabilistic model scheduler
-- `CustomLoss`: Combines torque prediction MSE with latent state MSE (scaled by C parameter)
-- Encoder supports both image input (CNN or AlexNet) and Cartesian coordinate input (MLP)
+**Diffusion Policy (U-Net)**:
+- Conditions on observation history (obs_horizon=2)
+- Predicts pred_horizon=16 future actions
+- Executes action_horizon=8 before replanning
+- 100 denoising iterations during inference
+- Uses 1D convolutional U-Net with FiLM conditioning
 
-**Training** ([train_w_datasets.py](fbc/neural_network/train_w_datasets.py), [train_diffusion.py](fbc/neural_network/train_diffusion.py)):
-- DNFC/MLP Baseline: Trains multiple model complexities (low/medium/high/xhigh) with multiple random seeds (10 runs each)
-- Diffusion Policy (NEW): Dedicated training script with EMA, cosine LR schedule, AdamW optimizer
-- Adds Gaussian noise (std=0.004) to states during training for robustness (DNFC/MLP only)
-- Saves checkpoints every 100 epochs with loss plots and model weights
-- Validation split is pre-computed and stored in `split_indices_{ds_ratio}.pt` (DNFC/MLP) or random split (Diffusion)
-
-**Testing** ([testers.py](fbc/neural_network/testers.py), [online_tester.py](fbc/neural_network/online_tester.py)):
-- `Tester` class: Loads models (DNFC, MLP Baseline, Diffusion Policy), runs emulated/offline tests, computes metrics
-- Diffusion inference: Receding horizon control with observation history deque and action buffer management
-- Online testing: ROS integration for real robot deployment (supports all model types)
-- Metrics: DTW distance to ground truth trajectories, success rate (milestone completion)
-- Task phases: Grasp object B → Place on A → Grasp object C → Place on A
-
-**Robot Interface**:
-- [global_defines.py](fbc/neural_network/global_defines.py): TOR class with robot constants, joint limits, predefined poses
-- [torkin.py](fbc/neural_network/torkin.py): Forward/inverse kinematics using generated code
-- [udp_comm.py](fbc/neural_network/udp_comm.py): UDP communication for robot commands (implied, not read but referenced)
-
-## Common Commands
-
-### Training
-
-**DNFC and MLP Baseline:**
-```bash
-# Train models (runs all complexity levels with 10 seeds each)
-cd fbc/neural_network
-python train_w_datasets.py
-```
-
-**Diffusion Policy:**
-```bash
-# Train diffusion policy baseline
-cd fbc/neural_network
-python train_diffusion.py
-```
-
-Training configuration is set in [config.py](fbc/neural_network/config.py):
-- `episodes_num_ds`: Number of trajectories in dataset
-- `dataset_name`: Dataset folder name (e.g., "trajs:72_blocks:3_triangle_v_scarce")
-- `ds_ratio`: Train/test split identifier (e.g., "extrap_0.85", "interp_0.95")
-- `use_custom_loss`: Enable custom loss (True) vs. MSE-only (False) [DNFC only]
-- `C`: Weight for latent state loss component (default: 1e-5) [DNFC only]
-- `obs_horizon`, `pred_horizon`, `action_horizon`: Temporal parameters for diffusion policy
-
-### Testing
-
-**Emulated Testing:**
-```bash
-# Offline emulation testing for DNFC/MLP
-cd fbc/neural_network
-python emulated_test.py  # Edit file to configure test parameters
-
-# Test diffusion policy
-python test_diffusion_emulated.py
-```
-
-**Online Robot Testing (requires ROS):**
-```bash
-python online_tester.py  # Supports DNFC, MLP Baseline, and Diffusion Policy
-```
-
-Testing loads trained weights from:
-```
-fbc/neural_network/weights/{dataset_name}|{ds_ratio}|{model_name}/train_no_{i}/fbc_{epoch}.pth
-```
-
-Example paths:
-- DNFC: `weights/trajs:72_blocks:3_triangle_v_scarce|extrap_0.85|cus_los_1e-05|tar_cart|2+2l_lat:sub-nvel|24.085K_params/train_no_0/fbc_4000.pth`
-- Diffusion: `weights/trajs:72_blocks:3_triangle_v_scarce|extrap_0.85|diffusion_pol|oh:2|ph:16|ah:8|65322.0K_params/train_no_0/fbc_4000.pth`
-
-### Data Exploration
-Jupyter notebooks are in [fbc/neural_network/](fbc/neural_network/):
-- Data preprocessing and visualization notebooks
-- Results analysis notebooks
-
-## Dataset Structure
-
-Datasets are stored in [fbc/neural_network/data/torobo/](fbc/neural_network/data/torobo/):
-```
-trajs:{num}_blocks:3_{variant}/
-├── train_{ratio}.npy        # Training episodes (N × 299 × features)
-├── test_{ratio}.npy         # Test episodes
-└── split_indices_{ratio}.pt # Train/val split indices
-```
-
-Each trajectory step contains:
-- `[0]`: Step number
-- `[1:15]`: State (7 joint positions + 7 velocities)
-- `[15:24]`: Target coordinates (3×3 for objects A, B, C)
-- `[24:28]`: One-hot task phase (4 phases)
-- `[28:35]`: Action (7 joint velocities)
-
-## Code Patterns
-
-### State Representation
-State is always 14D: `[q1, q2, ..., q7, dq1, dq2, ..., dq7]` (positions + velocities)
-
-### Model Forward Pass
-```python
-# DNFC model
-action_pred, x_des, diff = model(target_repr, state)
-# x_des: encoder output (desired latent state)
-# diff: x_des - state (used as controller input)
-
-# Baseline model
-action_pred = baseline(torch.cat((target_repr, state), dim=1))
-
-# Diffusion Policy model
-obs_seq = torch.stack(list(obs_deque))  # (obs_horizon, obs_dim)
-obs_seq = obs_seq.unsqueeze(0)  # (1, obs_horizon, obs_dim)
-action_seq = diffusion_model.get_action(obs_seq)  # (1, pred_horizon, action_dim)
-# Execute first action_horizon actions, then replan
-```
-
-### Checkpoint Naming Convention
-Model names encode architecture: `{loss_type}|{target_type}|{architecture}|{num_params}K_params`
-- **DNFC/MLP:**
-  - Loss: `cus_los_{C}` or `mse_los`
-  - Target: `tar_cart` or `tar_img`
-  - Architecture: `base|{v_name_base}` or just `{v_name}`
-- **Diffusion Policy:**
-  - Format: `diffusion_pol|oh:{obs_horizon}|ph:{pred_horizon}|ah:{action_horizon}|{num_params}K_params`
-  - Example: `diffusion_pol|oh:2|ph:16|ah:8|65322.0K_params`
-
-### Virtual Environment
-A virtual environment exists at [fbc/neural_network/.venv/](fbc/neural_network/.venv/) but no requirements.txt is tracked. Dependencies include:
-- PyTorch
-- NumPy
-- Matplotlib
-- scikit-learn
-- ROS libraries (rospy, roslibpy)
-- DTW library
-- PIL
-- **Diffusion Policy additional dependencies:**
-  - `diffusers` - HuggingFace library for diffusion models (DDPMScheduler, EMAModel)
-  - `transformers` - Required by diffusers
-  - `scikit-image` - Image processing utilities
-
-## Important Constraints
-
-- **7-DOF arm**: All models assume 7 joints for the right arm
-- **Fixed trajectory length**: 299 steps per episode
-- **ROS dependency**: Online testing requires ROS environment with Torobo robot interface
-- **Data locality**: Datasets are not version-controlled (stored in data/ directories)
-- **Git status**: There's an untracked Jupyter notebook for diffusion policy experiments
-
-## Results and Evaluation
-
-Results are saved to:
-```
-fbc/neural_network/results/{dataset_name}_{params}K_{ds_ratio}/ep:{epoch}/on_{model_variant}/
-├── perf.csv              # Performance metrics per episode
-├── plt_{eps}_{train}.png # 3D trajectory visualizations
-├── latent_reps_{eps}_{train}.png
-└── all_states_{model}.pickle
-```
-
-Metrics tracked:
-- Success rate (percentage of task milestones reached)
-- DTW distance (normalized and unnormalized) between predicted and ground truth trajectories
-- Per-joint MAE during training/validation
-
-
-## Diffusion Policy Integration (NEW)
-
-A Diffusion Policy baseline has been integrated into the project for comparison with DNFC and MLP baselines. See dedicated documentation:
-
-- **[DIFFUSION_INTEGRATION.md](fbc/neural_network/DIFFUSION_INTEGRATION.md)** - Comprehensive technical documentation
-- **[QUICK_START_DIFFUSION.md](fbc/neural_network/QUICK_START_DIFFUSION.md)** - Quick start guide with examples
+**Diffusion Policy (Transformer)**:
+- Same temporal structure as U-Net version
+- Uses encoder-decoder transformer architecture
+- Cross-attention conditioning on observations
+- Causal attention mask for autoregressive structure
+- Better at capturing long-range dependencies
 
 ### Key Files
 
-**Implementation:**
-- [diffusion_models.py](fbc/neural_network/diffusion_models.py) - U-Net architecture and diffusion model wrapper
-- [diffusion_dataset.py](fbc/neural_network/diffusion_dataset.py) - Sequence-based dataset for temporal modeling
-- [train_diffusion.py](fbc/neural_network/train_diffusion.py) - Training script with EMA and cosine LR schedule
-- [test_diffusion_emulated.py](fbc/neural_network/test_diffusion_emulated.py) - Example test script
+| File | Purpose |
+|------|---------|
+| [config.py](fbc/neural_network/config.py) | All hyperparameters and model settings |
+| [nn_models.py](fbc/neural_network/nn_models.py) | DNFC, MLP Baseline, CustomLoss |
+| [diffusion_models.py](fbc/neural_network/diffusion_models.py) | ConditionalUnet1D, TransformerForDiffusion, DiffusionPolicyModel, DiffusionTransformerPolicyModel |
+| [train_w_datasets.py](fbc/neural_network/train_w_datasets.py) | Training for DNFC/MLP |
+| [train_diffusion.py](fbc/neural_network/train_diffusion.py) | Training for U-Net Diffusion Policy |
+| [train_diffusion_transformer.py](fbc/neural_network/train_diffusion_transformer.py) | Training for Transformer Diffusion Policy |
+| [testers.py](fbc/neural_network/testers.py) | Tester class for emulated testing |
+| [online_tester.py](fbc/neural_network/online_tester.py) | Real robot testing (ROS) |
+| [global_defines.py](fbc/neural_network/global_defines.py) | TOR class: robot constants, joint limits |
+| [torkin.py](fbc/neural_network/torkin.py) | Forward/inverse kinematics |
 
-**Modified Files:**
-- [config.py](fbc/neural_network/config.py) - Added diffusion hyperparameters (obs_horizon, pred_horizon, action_horizon)
-- [testers.py](fbc/neural_network/testers.py) - Added `load_diffusion_model()` and `get_emulated_diffusion()`
-- [online_tester.py](fbc/neural_network/online_tester.py) - Added `online_test_diffusion()` for real robot testing
+## Common Commands
 
-### Quick Start
-
-**Train:**
+### Environment Setup
 ```bash
 cd fbc/neural_network
-python train_diffusion.py  # Trains medium complexity by default
+source .venv/bin/activate  # Activate virtual environment
+pip install torch torchvision numpy matplotlib scikit-learn dtw-python pillow
+pip install diffusers transformers scikit-image  # For diffusion policy
 ```
 
-**Test:**
+### Training
+```bash
+cd fbc/neural_network
+
+# DNFC + MLP Baseline (trains all complexities with 10 seeds each)
+python train_w_datasets.py
+
+# Diffusion Policy (U-Net)
+python train_diffusion.py
+
+# Diffusion Policy (Transformer)
+python train_diffusion_transformer.py
+```
+
+Configuration in [config.py](fbc/neural_network/config.py):
+- `dataset_name`: e.g., `"trajs:72_blocks:3_triangle_v_scarce"`
+- `ds_ratio`: `"extrap_0.85"` or `"interp_0.95"`
+- `use_custom_loss`, `C`: DNFC loss settings
+- `obs_horizon`, `pred_horizon`, `action_horizon`: Diffusion temporal params
+
+### Testing
+```bash
+cd fbc/neural_network
+
+# Emulated testing
+python emulated_test.py                      # DNFC/MLP
+python test_diffusion_emulated.py            # U-Net Diffusion
+python test_diffusion_transformer_emulated.py # Transformer Diffusion
+
+# Online robot testing (requires ROS)
+python online_tester.py
+```
+
+### Using the Tester Class
 ```python
 from testers import Tester
 
 tester = Tester()
-tester.load_diffusion_model(train_no=0, epoch_no=4000, model_complexity="medium")
+
+# Load DNFC + Baseline
+tester.load_model(train_no=0, epoch_no=4000, use_custom_loss=True, model_complexity='medium')
+joints, success = tester.get_emulated(use_baseline=False, num=5, return_path_point=True)
+
+# Load U-Net Diffusion
+tester.load_diffusion_model(train_no=0, epoch_no=4000, model_complexity='medium')
 joints, success = tester.get_emulated_diffusion(5, return_path_point=True)
-print(f"Reached {success}/4 milestones")
+
+# Load Transformer Diffusion
+tester.load_diffusion_transformer_model(train_no=0, epoch_no=4000, model_complexity='medium')
+joints, success = tester.get_emulated_diffusion_transformer(5, return_path_point=True)
 ```
 
-### Key Differences
+## Dataset Structure
 
-| Aspect | DNFC/MLP Baseline | Diffusion Policy |
-|--------|-------------------|------------------|
-| **Prediction** | Single action (7D) | Action sequence (16×7D) |
-| **Temporal** | Current state only | History (2 timesteps) |
-| **Inference** | 1 forward pass | 100 denoising iterations |
-| **Replanning** | Every step | Every 8 steps |
-| **Data normalization** | None | [-1, 1] range |
+Location: `fbc/neural_network/data/torobo/trajs:{num}_blocks:3_{variant}/`
 
-For detailed implementation notes, troubleshooting, and hyperparameter tuning, see [DIFFUSION_INTEGRATION.md](fbc/neural_network/DIFFUSION_INTEGRATION.md).
+**Trajectory shape**: `(N_episodes, 299, 35)`
 
+| Index | Content | Dim |
+|-------|---------|-----|
+| `[0]` | Step number | 1 |
+| `[1:15]` | State (joint pos + vel) | 14 |
+| `[15:24]` | Target coords (A, B, C) | 9 |
+| `[24:28]` | One-hot task phase | 4 |
+| `[28:35]` | Action (joint velocities) | 7 |
+
+**Task phases**: Grasp B → Place on A → Grasp C → Place on A
+
+## Code Patterns
+
+### Model Forward Pass
+```python
+# DNFC: returns (action, desired_latent, latent_error)
+action, x_des, diff = model(target_repr, state)
+
+# MLP Baseline
+action = baseline(torch.cat((target_repr, state), dim=1))
+
+# U-Net Diffusion: flatten obs for FiLM conditioning
+obs_cond = obs_seq.flatten(start_dim=1)  # (B, obs_horizon * obs_dim)
+action_seq = diffusion_model.get_action(obs_seq)  # (1, pred_horizon, 7)
+
+# Transformer Diffusion: pass obs sequence for cross-attention
+# obs_seq shape: (B, obs_horizon, obs_dim)
+action_seq = transformer_diffusion_model.get_action(obs_seq)  # (1, pred_horizon, 7)
+```
+
+### Checkpoint Paths
+```
+weights/{dataset}|{ds_ratio}|{model_name}/train_no_{i}/fbc_{epoch}.pth
+```
+
+Model name formats:
+- DNFC: `cus_los_1e-05|tar_cart|2+2l_lat:sub-nvel|24.085K_params`
+- MLP: `mse_los|tar_cart|base|3l_base|24.091K_params`
+- U-Net Diffusion: `diffusion_pol|oh:2|ph:16|ah:8|65322.0K_params`
+- Transformer Diffusion: `diffusion_transformer|oh:2|ph:16|ah:8|170.631K_params`
+
+## Constraints
+
+- **7-DOF arm**: All models use 7 joints (right arm)
+- **Fixed trajectory**: 299 steps per episode
+- **State dim**: Always 14D (7 positions + 7 velocities)
+- **ROS required**: Online testing needs Torobo robot interface
+- **Datasets**: Stored locally in `data/`, not version-controlled
+
+## Results Structure
+
+```
+results/{dataset}_{params}K_{ds_ratio}/ep:{epoch}/on_{model}/
+├── perf.csv              # DTW distance, success rate per episode
+├── plt_{eps}_{train}.png # 3D trajectory visualization
+└── all_states_{model}.pickle
+```
+
+## Model Complexity Levels
+
+| Level | DNFC/MLP Hidden | Diffusion U-Net Channels | Transformer (layer/head/emb) | Params |
+|-------|-----------------|--------------------------|------------------------------|--------|
+| minimal | - | [16, 32] | 2/2/64 | ~25K |
+| low | 64/192 | [128, 256, 512] | 4/4/128 | ~6K / ~6M / ~200K |
+| medium | 128/384 | [256, 512, 1024] | 8/4/256 | ~24K / ~65M / ~1.5M |
+| high | 256/768 | [512, 1024, 2048] | 12/8/512 | ~96K / ~260M / ~12M |
+| xhigh | 512/1536 | [512, 1024, 2048, 4096] | 12/12/768 | ~384K / ~520M / ~45M |
+
+## Additional Documentation
+
+For diffusion policy implementation details, hyperparameter tuning, and troubleshooting:
+- [DIFFUSION_INTEGRATION.md](fbc/neural_network/DIFFUSION_INTEGRATION.md)
+- [QUICK_START_DIFFUSION.md](fbc/neural_network/QUICK_START_DIFFUSION.md)

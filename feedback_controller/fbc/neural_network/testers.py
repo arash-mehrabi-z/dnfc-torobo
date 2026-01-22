@@ -7,8 +7,8 @@ import torch.nn as nn
 import math
 import os
 from config import Config
-from diffusion_models import DiffusionPolicyModel
-from diffusion_dataset import DiffusionTrajectoryDataset, unnormalize_data
+from diffusion_models import DiffusionPolicyModel, DiffusionTransformerPolicyModel
+from diffusion_dataset import DiffusionTrajectoryDataset, unnormalize_data, normalize_data
 import collections
 
 
@@ -43,6 +43,9 @@ class Tester():
         self.diffusion_model = None
         self.obs_deque = None
         self.diffusion_dataset = None
+
+        # Transformer diffusion model attributes
+        self.diffusion_transformer_model = None
 
     def load_model(self, train_no, epoch_no, use_custom_loss, model_complexity):
 
@@ -486,6 +489,178 @@ class Tester():
             obs_horizon=self.config.obs_horizon,
             action_horizon=self.config.action_horizon
         )
+
+    def load_diffusion_transformer_model(self, train_no, epoch_no, model_complexity):
+        """Load a trained transformer-based diffusion policy model"""
+        n_layer, n_head, n_emb, p_drop_attn, n_cond_layers = self.config.get_transformer_diffusion_dims(model_complexity)
+        obs_dim = self.config.state_dim + self.config.coords_dim + self.config.onehot_dim
+
+        self.diffusion_transformer_model = DiffusionTransformerPolicyModel(
+            obs_dim=obs_dim,
+            action_dim=self.joint_size,
+            obs_horizon=self.config.obs_horizon,
+            pred_horizon=self.config.pred_horizon,
+            action_horizon=self.config.action_horizon,
+            num_diffusion_iters=self.config.num_diffusion_iters_inference,
+            n_layer=n_layer,
+            n_head=n_head,
+            n_emb=n_emb,
+            p_drop_emb=0.0,
+            p_drop_attn=p_drop_attn,
+            causal_attn=True,
+            n_cond_layers=n_cond_layers
+        )
+
+        model_name = self.config.get_model_name(
+            False, False, False, use_diffusion=True, use_transformer=True
+        )
+        num_params = self.config.get_params_num(self.diffusion_transformer_model)
+        model_name += f"|{num_params}K_params"
+
+        model_path = os.path.join(
+            self.cur_file_dir_path,
+            f'weights/{self.config.dataset_name}|{self.config.ds_ratio}|{model_name}/train_no_{train_no}/fbc_{epoch_no}.pth'
+        )
+
+        self.diffusion_transformer_model.load_state_dict(
+            torch.load(model_path, map_location=torch.device(self.device), weights_only=True)
+        )
+        self.diffusion_transformer_model.to(self.device)
+        print(f"Loaded transformer diffusion model from {model_path}")
+
+        # Also load the dataset to get normalization stats (if not already loaded)
+        if self.diffusion_dataset is None:
+            ds_root_dir = os.path.join(self.cur_file_dir_path,
+                                       f'data/torobo/{self.config.dataset_name}')
+            self.diffusion_dataset = DiffusionTrajectoryDataset(
+                ds_root_dir, self.config.ds_file_name,
+                self.joint_size,
+                pred_horizon=self.config.pred_horizon,
+                obs_horizon=self.config.obs_horizon,
+                action_horizon=self.config.action_horizon
+            )
+
+    def get_emulated_diffusion_transformer(self, num, return_path_point=False):
+        """Emulated test using transformer-based diffusion policy with receding horizon control"""
+        if self.diffusion_transformer_model is None:
+            raise Exception("Transformer diffusion model not loaded. Call load_diffusion_transformer_model first.")
+
+        elem = self.dataset[num]
+
+        # Initialize state
+        state = torch.tensor(
+            elem[0][self.step_size : self.step_size+self.state_size].tolist()
+        ).to(self.device)
+
+        # Get goal and one-hot
+        goal = elem[0][self.step_size + self.state_size :
+                       self.step_size + self.state_size + self.target_size].tolist()
+        one_hot = elem[0][self.step_size + self.state_size + self.target_size :
+                          self.step_size + self.state_size + self.target_size + self.onehot_size
+                          ].tolist()
+
+        # Initialize observation deque (stores last obs_horizon observations)
+        obs = torch.cat([
+            state,
+            torch.tensor(goal + one_hot).to(self.device)
+        ])
+        self.obs_deque = collections.deque(
+            [obs] * self.config.obs_horizon,
+            maxlen=self.config.obs_horizon
+        )
+
+        # Tracking
+        y1, y2, y3, y4, y5, y6, y7 = [], [], [], [], [], [], []
+        path_point = 0
+
+        # Milestones for task switching
+        obstA = torch.tensor(goal[0:3])
+        obstB = torch.tensor(goal[3:6])
+        obstC = torch.tensor(goal[6:9])
+        grepB = [obstB[0], obstB[1], 0.87]
+        putB = [obstA[0], obstA[1], 0.9]
+        grepC = [obstC[0], obstC[1], 0.87]
+        putC = [obstA[0], obstA[1], 0.93]
+
+        self.diffusion_transformer_model.eval()
+        step = 0
+        action_buffer = None
+        action_buffer_idx = 0
+
+        with torch.no_grad():
+            while step < self.dataset.shape[1]:
+                # Check if need new action sequence
+                if action_buffer is None or action_buffer_idx >= self.config.action_horizon:
+                    # Stack observation history and normalize
+                    obs_seq = torch.stack(list(self.obs_deque))  # (obs_horizon, obs_dim)
+                    obs_seq_np = obs_seq.cpu().numpy()
+
+                    # Normalize observation using dataset stats
+                    obs_seq_norm = normalize_data(obs_seq_np, self.diffusion_dataset.stats['obs'])
+                    obs_seq_norm = torch.from_numpy(obs_seq_norm).to(self.device).float()
+                    obs_seq_norm = obs_seq_norm.unsqueeze(0)  # (1, obs_horizon, obs_dim)
+
+                    # Get action sequence from transformer diffusion model
+                    action_seq_norm = self.diffusion_transformer_model.get_action(obs_seq_norm)  # (1, pred_horizon, action_dim)
+                    action_seq_norm = action_seq_norm.squeeze(0).cpu().numpy()  # (pred_horizon, action_dim)
+
+                    # Unnormalize action
+                    action_seq = unnormalize_data(action_seq_norm, self.diffusion_dataset.stats['action'])
+                    action_seq = torch.from_numpy(action_seq).to(self.device)
+
+                    # Extract actions to execute
+                    start_idx = self.config.obs_horizon - 1
+                    end_idx = start_idx + self.config.action_horizon
+                    action_buffer = action_seq[start_idx:end_idx, :]  # (action_horizon, action_dim)
+                    action_buffer_idx = 0
+
+                # Execute one action
+                action = action_buffer[action_buffer_idx]
+                action_buffer_idx += 1
+
+                # Update state
+                state[:7] += action
+                state[7:] = action
+
+                # Update observation
+                goal_tensor = torch.tensor(goal + one_hot).to(self.device)
+                obs = torch.cat([state, goal_tensor])
+                self.obs_deque.append(obs)
+
+                # Check milestones and update one-hot
+                if path_point==0 and self.close_enough(state, grepB):
+                    path_point = 1
+                    one_hot = [1, 0, 0, 0]
+                    # Clear action buffer to force replanning on task change
+                    action_buffer = None
+                elif path_point==1 and self.close_enough(state, putB):
+                    path_point = 2
+                    one_hot = [0, 1, 0, 0]
+                    action_buffer = None
+                elif path_point==2 and self.close_enough(state, grepC):
+                    path_point = 3
+                    one_hot = [0, 0, 1, 0]
+                    action_buffer = None
+                elif path_point==3 and self.close_enough(state, putC):
+                    path_point = 4
+                    one_hot = [0, 0, 0, 1]
+                    action_buffer = None
+
+                # Store joint positions
+                y1.append(float(state[0]))
+                y2.append(float(state[1]))
+                y3.append(float(state[2]))
+                y4.append(float(state[3]))
+                y5.append(float(state[4]))
+                y6.append(float(state[5]))
+                y7.append(float(state[6]))
+
+                step += 1
+
+        if return_path_point:
+            return y1, y2, y3, y4, y5, y6, y7, path_point
+        else:
+            return y1, y2, y3, y4, y5, y6, y7
 
     def get_emulated_diffusion(self, num, return_path_point=False):
         """Emulated test using diffusion policy with receding horizon control"""
