@@ -31,6 +31,7 @@ class Tester():
         
         dataset_path = os.path.join(self.cur_file_dir_path, 
                                     f'data/torobo/{self.config.dataset_name}/{self.config.ds_test_file}')
+                                    # f'data/torobo/{self.config.dataset_name}/{self.config.ds_file_name}')
         self.dataset = np.load(dataset_path, allow_pickle=True, encoding='latin1')
         print("Tester loaded dataset with shape:", self.dataset.shape)
         print("from this path", dataset_path)

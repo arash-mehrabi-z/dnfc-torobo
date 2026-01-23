@@ -26,9 +26,9 @@ class Config:
 
         # Diffusion Policy parameters (shared)
         self.use_diffusion = True  # Flag to enable diffusion policy
-        self.obs_horizon = 2  # Number of past observations to condition on (1 = like MLP)
-        self.pred_horizon = 16  # Number of future actions to predict
-        self.action_horizon = 8  # Number of actions to execute before replanning
+        self.obs_horizon = 1  # Number of past observations to condition on (1 = like MLP)
+        self.pred_horizon = 40  # Number of future actions to predict
+        self.action_horizon = 1 #8  # Number of actions to execute before replanning
         self.num_diffusion_iters_train = 100  # Diffusion iterations during training
         self.num_diffusion_iters_inference = 100  # Diffusion iterations during inference
         self.diffusion_beta_schedule = 'squaredcos_cap_v2'  # Noise schedule

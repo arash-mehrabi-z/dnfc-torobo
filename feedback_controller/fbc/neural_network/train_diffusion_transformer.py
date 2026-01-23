@@ -39,12 +39,12 @@ action_dim = joints_num
 obs_dim = config.state_dim + config.coords_dim + config.onehot_dim
 
 # Training settings
-num_epochs = 20000 + 1
+num_epochs = 15000 + 1
 batch_size = 256
 learning_rate = 1e-4
 weight_decay = 1e-3  # Higher weight decay for transformers
 validation_interval = 100
-num_trains = 1
+num_trains = 2
 lr_warmup_steps = 1000  # Warmup is critical for transformers
 
 

@@ -145,7 +145,7 @@ def online_test_diffusion_transformer(tester:Tester, eps_num):
     step_size = tester.step_size
     target_size = tester.target_size
     onehot_size = tester.onehot_size
-    traj_step_size = 900
+    traj_step_size = 900 // 2
 
     elem = tester.dataset[eps_num]
     state = torch.tensor(
@@ -335,7 +335,7 @@ def online_test_diffusion(tester:Tester, eps_num):
     all_joints = []
     all_states = []
 
-    tester.diffusion_model.eval()
+    tester.diffusion_transformer_model.eval()
     action_buffer = None
     action_buffer_idx = 0
 
@@ -355,7 +355,7 @@ def online_test_diffusion(tester:Tester, eps_num):
                 obs_seq_norm = obs_seq_norm.unsqueeze(0)  # (1, obs_horizon, obs_dim)
 
                 # Get action sequence from diffusion model
-                action_seq_norm = tester.diffusion_model.get_action(obs_seq_norm)
+                action_seq_norm = tester.diffusion_transformer_model.get_action(obs_seq_norm)
                 action_seq_norm = action_seq_norm.squeeze(0).cpu().numpy()
 
                 # Unnormalize action
@@ -581,7 +581,7 @@ def create_results_dir(params_num):
     global epoch_no
 
     results_file = f'results/{config.dataset_name}_{params_num}K_{config.ds_ratio}'
-    results_file += f'/ep:{epoch_no}/on_{config.v_name_diffusion}_{config.C}_{config.use_custom_loss}_{config.v_name_base}'
+    results_file += f'/ep:{epoch_no}/on_{config.v_name_diffusion_transformer}_{config.C}_{config.use_custom_loss}_{config.v_name_base}'
     results_dir = os.path.join(cur_file_dir_path, results_file)
     if os.path.exists(results_dir):
         raise Exception(f"Result dir. exists. Are you testing again? Result dir: {results_dir}")
@@ -602,22 +602,25 @@ def create_results_dir(params_num):
 tester = Tester()
 kin = TorKin()
 
-epoch_no = 4000 #4000
+epoch_no = 15000 #4000
 train_num = 1 #10
 
-for model_complexity in ['minimal']: #['low', 'medium', 'high', 'xhigh']:
-    tester.load_diffusion_model(0, epoch_no, model_complexity)
-    params_num = tester.config.get_params_num(tester.diffusion_model)
+for model_complexity in ['low']: #['low', 'medium', 'high', 'xhigh']:
+    # tester.load_diffusion_model(0, epoch_no, model_complexity)
+    tester.load_diffusion_transformer_model(0, epoch_no, model_complexity)
+    params_num = tester.config.get_params_num(tester.diffusion_transformer_model)
     results_dir = create_results_dir(params_num)
 
     all_states_diffusion = []
     for eps_num in range(len(tester.dataset)):
         for i_train in range(train_num):
-            tester.load_diffusion_model(i_train, epoch_no, model_complexity)
+            # tester.load_diffusion_model(i_train, epoch_no, model_complexity)
+            tester.load_diffusion_transformer_model(i_train, epoch_no, model_complexity)
             rospy.init_node('denz')
             print('waiting for Diffusion Policy')
             comm.which('\n\n\n\ndiffusion start on path'+str(eps_num)+'\n\n\n\n')
-            all_joints_diff, loss_diff, _, states_diff = online_test_diffusion(tester, eps_num)
+            # all_joints_diff, loss_diff, _, states_diff = online_test_diffusion(tester, eps_num)
+            all_joints_diff, loss_diff, _, states_diff = online_test_diffusion_transformer(tester, eps_num)
 
             coords_diff = intrinsic_to_3d_cart(all_joints_diff)
             coords_gtruth = tester.get_real_coordinates(eps_num)
