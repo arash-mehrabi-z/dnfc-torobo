@@ -44,7 +44,7 @@ batch_size = 256
 learning_rate = 1e-4
 weight_decay = 1e-3  # Higher weight decay for transformers
 validation_interval = 100
-num_trains = 2
+num_trains = 1
 lr_warmup_steps = 1000  # Warmup is critical for transformers
 
 
@@ -190,8 +190,8 @@ def create_csv_files(weights_storage_root_dir):
 
 
 # Main training loop
-for model_complexity in ['low']:  # ['minimal', 'low', 'medium', 'high', 'xhigh']
-    n_layer, n_head, n_emb, p_drop_attn, n_cond_layers = config.get_transformer_diffusion_dims(model_complexity)
+for model_complexity in ['medium']:  # ['minimal', 'low', 'medium', 'high', 'xhigh']
+    n_layer, n_head, n_emb, p_drop_attn, n_cond_layers, ff_mult = config.get_transformer_diffusion_dims(model_complexity)
 
     for i_train in range(num_trains):
         fig = plt.figure(figsize=(12.8, 9.6))
@@ -231,7 +231,8 @@ for model_complexity in ['low']:  # ['minimal', 'low', 'medium', 'high', 'xhigh'
             p_drop_emb=0.0,
             p_drop_attn=p_drop_attn,
             causal_attn=True,
-            n_cond_layers=n_cond_layers
+            n_cond_layers=n_cond_layers,
+            ff_mult=ff_mult
         )
         model = model.to(device)
 

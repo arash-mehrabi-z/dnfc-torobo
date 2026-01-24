@@ -390,7 +390,8 @@ class TransformerForDiffusion(nn.Module):
             causal_attn: bool = True,
             time_as_cond: bool = True,
             obs_as_cond: bool = True,
-            n_cond_layers: int = 0
+            n_cond_layers: int = 0,
+            ff_mult: int = 4
         ) -> None:
         """
         Args:
@@ -408,6 +409,7 @@ class TransformerForDiffusion(nn.Module):
             time_as_cond: Whether to use diffusion timestep as conditioning token
             obs_as_cond: Whether to condition on observations via cross-attention
             n_cond_layers: Number of transformer encoder layers for condition (0 = MLP)
+            ff_mult: Feedforward expansion multiplier (default 4, use 1-2 for smaller models)
         """
         super().__init__()
 
@@ -448,7 +450,7 @@ class TransformerForDiffusion(nn.Module):
                 encoder_layer = nn.TransformerEncoderLayer(
                     d_model=n_emb,
                     nhead=n_head,
-                    dim_feedforward=4*n_emb,
+                    dim_feedforward=ff_mult * n_emb,
                     dropout=p_drop_attn,
                     activation='gelu',
                     batch_first=True,
@@ -461,16 +463,16 @@ class TransformerForDiffusion(nn.Module):
             else:
                 # Simple MLP for condition encoding
                 self.encoder = nn.Sequential(
-                    nn.Linear(n_emb, 4 * n_emb),
+                    nn.Linear(n_emb, ff_mult * n_emb),
                     nn.Mish(),
-                    nn.Linear(4 * n_emb, n_emb)
+                    nn.Linear(ff_mult * n_emb, n_emb)
                 )
 
             # Decoder with cross-attention to condition
             decoder_layer = nn.TransformerDecoderLayer(
                 d_model=n_emb,
                 nhead=n_head,
-                dim_feedforward=4*n_emb,
+                dim_feedforward=ff_mult * n_emb,
                 dropout=p_drop_attn,
                 activation='gelu',
                 batch_first=True,
@@ -486,7 +488,7 @@ class TransformerForDiffusion(nn.Module):
             encoder_layer = nn.TransformerEncoderLayer(
                 d_model=n_emb,
                 nhead=n_head,
-                dim_feedforward=4*n_emb,
+                dim_feedforward=ff_mult * n_emb,
                 dropout=p_drop_attn,
                 activation='gelu',
                 batch_first=True,
@@ -715,7 +717,8 @@ class DiffusionTransformerPolicyModel(nn.Module):
                  p_drop_emb: float = 0.0,
                  p_drop_attn: float = 0.1,
                  causal_attn: bool = True,
-                 n_cond_layers: int = 0):
+                 n_cond_layers: int = 0,
+                 ff_mult: int = 4):
         """
         Args:
             obs_dim: Observation dimension (state + target + onehot)
@@ -731,6 +734,7 @@ class DiffusionTransformerPolicyModel(nn.Module):
             p_drop_attn: Dropout for attention
             causal_attn: Whether to use causal attention
             n_cond_layers: Number of encoder layers for condition processing
+            ff_mult: Feedforward expansion multiplier (default 4, use 1-2 for smaller models)
         """
         super().__init__()
 
@@ -756,7 +760,8 @@ class DiffusionTransformerPolicyModel(nn.Module):
             causal_attn=causal_attn,
             time_as_cond=True,
             obs_as_cond=True,
-            n_cond_layers=n_cond_layers
+            n_cond_layers=n_cond_layers,
+            ff_mult=ff_mult
         )
 
         # Create the noise scheduler

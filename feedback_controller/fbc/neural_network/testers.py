@@ -493,7 +493,7 @@ class Tester():
 
     def load_diffusion_transformer_model(self, train_no, epoch_no, model_complexity):
         """Load a trained transformer-based diffusion policy model"""
-        n_layer, n_head, n_emb, p_drop_attn, n_cond_layers = self.config.get_transformer_diffusion_dims(model_complexity)
+        n_layer, n_head, n_emb, p_drop_attn, n_cond_layers, ff_mult = self.config.get_transformer_diffusion_dims(model_complexity)
         obs_dim = self.config.state_dim + self.config.coords_dim + self.config.onehot_dim
 
         self.diffusion_transformer_model = DiffusionTransformerPolicyModel(
@@ -509,7 +509,8 @@ class Tester():
             p_drop_emb=0.0,
             p_drop_attn=p_drop_attn,
             causal_attn=True,
-            n_cond_layers=n_cond_layers
+            n_cond_layers=n_cond_layers,
+            ff_mult=ff_mult
         )
 
         model_name = self.config.get_model_name(

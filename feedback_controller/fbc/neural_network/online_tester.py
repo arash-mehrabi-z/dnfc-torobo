@@ -602,7 +602,7 @@ def create_results_dir(params_num):
 tester = Tester()
 kin = TorKin()
 
-epoch_no = 15000 #4000
+epoch_no = 15000 #15000
 train_num = 1 #10
 
 for model_complexity in ['low']: #['low', 'medium', 'high', 'xhigh']:
