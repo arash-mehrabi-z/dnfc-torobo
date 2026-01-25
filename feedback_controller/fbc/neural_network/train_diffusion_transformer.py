@@ -39,12 +39,12 @@ action_dim = joints_num
 obs_dim = config.state_dim + config.coords_dim + config.onehot_dim
 
 # Training settings
-num_epochs = 15000 + 1
+num_epochs = 5000 + 1
 batch_size = 256
 learning_rate = 1e-4
 weight_decay = 1e-3  # Higher weight decay for transformers
-validation_interval = 100
-num_trains = 1
+validation_interval = 1000
+num_trains = 10
 lr_warmup_steps = 1000  # Warmup is critical for transformers
 
 
@@ -190,7 +190,7 @@ def create_csv_files(weights_storage_root_dir):
 
 
 # Main training loop
-for model_complexity in ['medium']:  # ['minimal', 'low', 'medium', 'high', 'xhigh']
+for model_complexity in ['low', 'medium', 'high', 'xhigh']:  # ['minimal', 'low', 'medium', 'high', 'xhigh']
     n_layer, n_head, n_emb, p_drop_attn, n_cond_layers, ff_mult = config.get_transformer_diffusion_dims(model_complexity)
 
     for i_train in range(num_trains):
@@ -238,6 +238,12 @@ for model_complexity in ['medium']:  # ['minimal', 'low', 'medium', 'high', 'xhi
 
         num_params = sum(p.numel() for p in model.parameters()) / 1e3
         model_name += f"|{num_params}K_params"
+
+        # print(model_name)
+        # print(num_params)
+        # print("===")
+        # print(model)
+        # err
 
         # Create dataloaders
         train_dataloader = DataLoader(train_set, batch_size=batch_size,

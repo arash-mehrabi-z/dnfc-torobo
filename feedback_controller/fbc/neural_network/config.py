@@ -143,30 +143,30 @@ class Config:
         elif model_complexity == 'low':
             n_layer = 2
             n_head = 2
-            n_emb = 32
-            p_drop_attn = 0.1
-            n_cond_layers = 0
-            ff_mult = 4
-        elif model_complexity == 'medium':
-            n_layer = 4
-            n_head = 4
             n_emb = 64
             p_drop_attn = 0.1
             n_cond_layers = 0
             ff_mult = 4
-        elif model_complexity == 'high':
-            n_layer = 12
-            n_head = 8
-            n_emb = 512
+        elif model_complexity == 'medium':
+            n_layer = 2
+            n_head = 2
+            n_emb = 128
             p_drop_attn = 0.1
-            n_cond_layers = 2
+            n_cond_layers = 0
+            ff_mult = 4
+        elif model_complexity == 'high':
+            n_layer = 4
+            n_head = 4
+            n_emb = 128
+            p_drop_attn = 0.1
+            n_cond_layers = 0
             ff_mult = 4
         elif model_complexity == 'xhigh':
-            n_layer = 12
-            n_head = 12
-            n_emb = 768
+            n_layer = 4
+            n_head = 4
+            n_emb = 128
             p_drop_attn = 0.1
-            n_cond_layers = 4
+            n_cond_layers = 1
             ff_mult = 4
         else:
             raise Exception("Model complexity is not defined.")
