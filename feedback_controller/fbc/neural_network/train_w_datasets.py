@@ -133,7 +133,7 @@ def run_test(n):
                 batch_action_pred = model(nn_input)
             else:
                 batch_action_pred, batch_x_des, batch_x, batch_diff = model(batch_target_repr,
-                                                                             batch_ee_repr)
+                                                                             batch_state)
 
         if use_custom_loss:
             # loss_custom, loss_torques = criterion(batch_action_pred, batch_action,
@@ -309,23 +309,28 @@ for model_complexity in ['XXhigh']:#['low', 'medium', 'high', 'xhigh']:
         print("train_set:", len(train_set))
         print("val_set:", len(val_set))
 
-        # Compute per-dimension statistics for ee_repr from training data
+        # Compute per-dimension statistics for ee_repr and joint_state from training data
         all_ee_repr = []
+        all_joint_state = []
         for idx in train_indices:
-            _, _, _, _, ee_repr = dataset[idx]
+            _, state, _, _, ee_repr = dataset[idx]
             all_ee_repr.append(ee_repr)
+            all_joint_state.append(state)
         all_ee_repr = np.array(all_ee_repr)
         ee_repr_std = torch.tensor(all_ee_repr.std(axis=0)).to(device).float()
         print(f"ee_repr std per dimension: {ee_repr_std}")
+        all_joint_state = np.array(all_joint_state)
+        joint_state_std = torch.tensor(all_joint_state.std(axis=0)).to(device).float()
+        print(f"joint_state std per dimension: {joint_state_std}")
 
         if use_baseline:
-            model = MLPBaseline(inp_dim=encoded_space_dim+target_dim, 
+            model = MLPBaseline(inp_dim=encoded_space_dim+target_dim,
                                 lin_hid=lin_hid, lin_out=lin_out,
                                 out_dim=action_dim)
         else:
             model = GeneralModel(encoded_space_dim=encoded_space_dim, target_dim=target_dim,
                                  enc_hid=enc_hid, cont_hid=cont_hid,
-                                 action_dim=action_dim, use_image=use_image, ee_dim=ee_dim)
+                                 action_dim=action_dim, use_image=use_image, joint_dim=2*joints_num)
         m = model.to(device)
         num_params = sum(p.numel() for p in m.parameters())/1e3
         model_name += f"|{num_params}K_params"
@@ -395,9 +400,9 @@ for model_complexity in ['XXhigh']:#['low', 'medium', 'high', 'xhigh']:
                 batch_ee_repr = batch_data[4].to(device).float()
 
                 # Dimension-aware noise: scale by each dimension's std
-                batch_noise = torch.randn(batch_ee_repr.size()).to(device).float()
-                batch_noise = batch_noise * ee_repr_std * noise_scale
-                batch_ee_repr_noise = batch_ee_repr + batch_noise
+                batch_noise = torch.randn(batch_state.size()).to(device).float()
+                batch_noise = batch_noise * joint_state_std * noise_scale
+                batch_state_noise = batch_state + batch_noise
 
                 optimizer.zero_grad()
                 if use_baseline:
@@ -405,9 +410,9 @@ for model_complexity in ['XXhigh']:#['low', 'medium', 'high', 'xhigh']:
                     batch_action_pred_noise = model(nn_input)
                 else:
                     batch_action_pred_noise, batch_x_des_noise, batch_x_noise, \
-                        batch_diff_noise = model(batch_target_repr, batch_ee_repr_noise)
+                        batch_diff_noise = model(batch_target_repr, batch_state_noise)
 
-                # No noise adjustment for action since ee_repr noise doesn't directly affect action
+                # No noise adjustment for action since joint_state noise doesn't directly affect action
                 batch_action_noise = batch_action
 
                 if use_custom_loss:

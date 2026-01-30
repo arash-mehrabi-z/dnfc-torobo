@@ -178,7 +178,7 @@ class MLP_3L(nn.Module):
     
 class GeneralModel(nn.Module):
     def __init__(self, encoded_space_dim, target_dim, action_dim,
-                 enc_hid, cont_hid, use_image, ee_dim=12):
+                 enc_hid, cont_hid, use_image, joint_dim=14):
         super().__init__()
         if use_image:
             # self.enc = Encoder(encoded_space_dim)
@@ -187,11 +187,11 @@ class GeneralModel(nn.Module):
             # # 4-layer encoder for target: target_dim → enc_hid → enc_hid → enc_hid//2 → encoded_space_dim
             # self.enc1_a = MLP_2L(target_dim, enc_hid, enc_hid)
             # self.enc1_b = MLP_2L(enc_hid, enc_hid // 2, encoded_space_dim)
-            # # 4-layer encoder for end-effector poses
-            # self.enc2_a = MLP_2L(ee_dim, enc_hid, enc_hid)
+            # # 4-layer encoder for joint states
+            # self.enc2_a = MLP_2L(joint_dim, enc_hid, enc_hid)
             # self.enc2_b = MLP_2L(enc_hid, enc_hid // 2, encoded_space_dim)
             self.enc1 = MLP_2L(target_dim, enc_hid, encoded_space_dim)
-            self.enc2 = MLP_2L(ee_dim, enc_hid, encoded_space_dim)
+            # self.enc2 = MLP_2L(joint_dim, enc_hid, encoded_space_dim)
 
         # self.mlp_controller = MLP_3L(encoded_space_dim, cont_hid, cont_hid // 2, action_dim)
         self.mlp_controller = MLP_2L(encoded_space_dim, cont_hid, action_dim)
@@ -201,15 +201,16 @@ class GeneralModel(nn.Module):
         # )
         self.mlp_controller.linear[-1].bias.data.fill_(0.0)
 
-    def forward(self, target_repr, ee_repr):
-        # Encode end-effector poses (4 layers: enc2_a + enc2_b)
-        # x = self.enc2_a(ee_repr)
+    def forward(self, target_repr, joint_state):
+        # Encode joint states (4 layers: enc2_a + enc2_b)
+        # x = self.enc2_a(joint_state)
         # x = self.enc2_b(F.relu(x))  # (batch_size, encoded_space_dim)
         # Encode target representation (4 layers: enc1_a + enc1_b)
         # x_des = self.enc1_a(target_repr)
         # x_des = self.enc1_b(F.relu(x_des))  # (batch_size, encoded_space_dim)
         # x_des = self.enc2(F.relu(x_des)) # (batch_size, encoded_space_dim)
-        x = self.enc2(ee_repr)
+        # x = self.enc2(joint_state)
+        x = joint_state
         x_des = self.enc1(target_repr)
 
         diff = x_des - x

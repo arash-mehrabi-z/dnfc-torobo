@@ -110,20 +110,20 @@ def online_test(tester:Tester, eps_num, use_baseline):
         goal_tensor = torch.tensor(goal+one_hot).to(device)
         goal_nn = torch.unsqueeze(goal_tensor, 0)
 
-        # Compute ee_repr from current and previous joint positions
+        # Compute ee_repr from current and previous joint positions (kept but not used)
         curr_joints = state[:7].cpu().detach().numpy()
         ee_repr_np = compute_ee_repr(kin, curr_joints, prev_joints)
         ee_repr = torch.tensor(ee_repr_np).to(device).float()
         ee_repr_nn = torch.unsqueeze(ee_repr, 0)
 
+        state_nn = torch.unsqueeze(state, 0).float()
         if use_baseline:
-            state_nn = torch.unsqueeze(state, 0)
             basel_input = torch.cat((goal_nn, state_nn), dim=1)
             tester.baseline.eval()
             velocities_tensor = tester.baseline(basel_input)
         else:
             tester.model.eval()
-            velocities_tensor, x_des, x, _ = tester.model(goal_nn, ee_repr_nn)
+            velocities_tensor, x_des, x, _ = tester.model(goal_nn, state_nn)
             x_des = torch.squeeze(x_des, 0)
             latent_reps.append(x_des.tolist())
 
@@ -356,7 +356,7 @@ tester = Tester()
 kin = TorKin()
 
 use_only_dnfc = True
-epoch_no = 6400 #4000
+epoch_no = 7000 #4000
 train_num = 1 #10
 
 for model_complexity in ['XXhigh']: #['low', 'medium', 'high', 'xhigh']: #['medium']:

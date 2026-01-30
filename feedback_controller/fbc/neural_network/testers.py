@@ -56,7 +56,7 @@ class Tester():
         self.model = GeneralModel(self.config.encoded_space_dim, self.target_size+self.onehot_size,
                                   self.joint_size,
                                   enc_hid, cont_hid,
-                                  use_image=False, ee_dim=self.ee_dim)
+                                  use_image=False, joint_dim=self.state_size)
         self.baseline = MLPBaseline(self.state_size + (self.target_size+self.onehot_size),
                                     lin_hid, lin_out,
                                     self.joint_size)
@@ -126,18 +126,19 @@ class Tester():
             goal_tensor = torch.tensor(goal).to(self.device).float()
             goal_nn = torch.unsqueeze(goal_tensor, 0)
 
+            # Compute ee_repr from current and previous joint positions (kept but not used)
+            ee_repr_np = self.compute_ee_repr(curr_joints, prev_joints)
+            ee_repr = torch.tensor(ee_repr_np).to(self.device).float()
+            ee_repr_nn = torch.unsqueeze(ee_repr, 0)
+
+            input_tensor = torch.tensor(state.tolist()).to(self.device).float()
+            state_nn = torch.unsqueeze(input_tensor, 0)
             if usebaseline:
-                input_tensor = torch.tensor(state.tolist()).to(self.device).float()
-                state_nn = torch.unsqueeze(input_tensor, 0)
                 basel_input = torch.cat((goal_nn, state_nn), dim=1)
                 velocities_tensor = self.baseline(basel_input)
                 velocities_tensor = torch.squeeze(velocities_tensor, 0)
             else:
-                # Compute ee_repr from current and previous joint positions
-                ee_repr_np = self.compute_ee_repr(curr_joints, prev_joints)
-                ee_repr = torch.tensor(ee_repr_np).to(self.device).float()
-                ee_repr_nn = torch.unsqueeze(ee_repr, 0)
-                velocities_tensor, _, _, _ = self.model(goal_nn, ee_repr_nn)
+                velocities_tensor, _, _, _ = self.model(goal_nn, state_nn)
                 velocities_tensor = torch.squeeze(velocities_tensor, 0)
 
             # Update previous joints for next iteration
@@ -206,18 +207,18 @@ class Tester():
             goal_tensor = torch.tensor(goal + one_hot).to(self.device)
             goal_nn = torch.unsqueeze(goal_tensor, 0)
 
-            # Compute ee_repr from current and previous joint positions
+            # Compute ee_repr from current and previous joint positions (kept but not used)
             curr_joints = state[:self.joint_size].detach().cpu().numpy()
             ee_repr_np = self.compute_ee_repr(curr_joints, prev_joints)
             ee_repr = torch.tensor(ee_repr_np).to(self.device).float()
             ee_repr_nn = torch.unsqueeze(ee_repr, 0)
 
+            state_nn = torch.unsqueeze(state, 0).float()
             if use_baseline:
-                state_nn = torch.unsqueeze(state, 0)
                 basel_input = torch.cat((goal_nn, state_nn), dim=1)
                 velocities_tensor = self.baseline(basel_input)
             else:
-                velocities_tensor, x_des, x, _ = self.model(goal_nn, ee_repr_nn)
+                velocities_tensor, x_des, x, _ = self.model(goal_nn, state_nn)
 
             velocities_tensor = torch.squeeze(velocities_tensor, 0)
             print_it_out = out
@@ -313,18 +314,18 @@ class Tester():
             goal_tensor = torch.tensor(goal + one_hot).to(self.device).float()
             goal_nn = torch.unsqueeze(goal_tensor, 0)
 
-            # Compute ee_repr from current and previous joint positions
+            # Compute ee_repr from current and previous joint positions (kept but not used)
             curr_joints = state[:self.joint_size].detach().cpu().numpy()
             ee_repr_np = self.compute_ee_repr(curr_joints, prev_joints)
             ee_repr = torch.tensor(ee_repr_np).to(self.device).float()
             ee_repr_nn = torch.unsqueeze(ee_repr, 0)
 
+            state_nn = torch.unsqueeze(state, 0).float()
             if usebaseline:
-                state_nn = torch.unsqueeze(state, 0)
                 basel_input = torch.cat((goal_nn, state_nn), dim=1)
                 velocities_tensor = self.baseline(basel_input)
             else:
-                velocities_tensor, x_des, x, _ = self.model(goal_nn, ee_repr_nn)
+                velocities_tensor, x_des, x, _ = self.model(goal_nn, state_nn)
 
             velocities_tensor = torch.squeeze(velocities_tensor, 0)
 
