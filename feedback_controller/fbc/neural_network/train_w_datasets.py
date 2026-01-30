@@ -30,11 +30,12 @@ from config import Config
 
 
 class TrajectoryDataset(Dataset):
-    def __init__(self, ds_root_dir, file_name, 
-                 joint_dim, target_dim, use_image=False):
+    def __init__(self, ds_root_dir, file_name,
+                 joint_dim, target_dim, ee_dim=12, use_image=False):
         self.joint_dim = joint_dim
         self.state_dim = 2 * joint_dim
         self.target_dim = target_dim
+        self.ee_dim = ee_dim
         self.ds_root_dir = ds_root_dir
         self.use_image = use_image
 
@@ -64,7 +65,15 @@ class TrajectoryDataset(Dataset):
         step = self.trajectories[traj_no, step_no, 0]
         state = self.trajectories[traj_no, step_no, 1:1+self.state_dim]
 
-        action = self.trajectories[traj_no, step_no, -self.joint_dim:]
+        # Action is at fixed indices 28:35 (after step, joints, velocities, target)
+        action_start_idx = 1 + self.state_dim + self.target_dim
+        action_end_idx = action_start_idx + self.joint_dim
+        action = self.trajectories[traj_no, step_no, action_start_idx:action_end_idx]
+
+        # End-effector poses: 2 consecutive (pos + euler_norm) at indices 35:47
+        ee_start_idx = action_end_idx
+        ee_end_idx = ee_start_idx + self.ee_dim
+        ee_repr = self.trajectories[traj_no, step_no, ee_start_idx:ee_end_idx]
 
         if self.use_image:
             img_path = os.path.join(self.ds_root_dir,
@@ -76,11 +85,11 @@ class TrajectoryDataset(Dataset):
         else:
             target_start_idx = 1 + self.state_dim
             target_end_idx = target_start_idx + self.target_dim
-            target_repr = self.trajectories[traj_no, step_no, 
+            target_repr = self.trajectories[traj_no, step_no,
                                            target_start_idx:target_end_idx]
             target_repr = target_repr
 
-        return step, state, target_repr, action
+        return step, state, target_repr, action, ee_repr
     
 
 def log_loss(n, val_loss_cutsom, val_loss_torques):
@@ -115,6 +124,7 @@ def run_test(n):
         batch_state = batch_data[1].to(device).float()
         batch_target_repr = batch_data[2].to(device).float()
         batch_action = batch_data[3].to(device).float()
+        batch_ee_repr = batch_data[4].to(device).float()
 
         model.eval()
         with torch.no_grad():
@@ -122,15 +132,15 @@ def run_test(n):
                 nn_input = torch.cat((batch_target_repr, batch_state), dim=1)
                 batch_action_pred = model(nn_input)
             else:
-                batch_action_pred, batch_x_des, batch_diff = model(batch_target_repr, 
-                                                                   batch_state)
-            
+                batch_action_pred, batch_x_des, batch_x, batch_diff = model(batch_target_repr,
+                                                                             batch_ee_repr)
+
         if use_custom_loss:
-            # loss_custom, loss_torques = criterion(batch_action_pred, batch_action, 
-            #                                     batch_x_des, batch_state, 
+            # loss_custom, loss_torques = criterion(batch_action_pred, batch_action,
+            #                                     batch_x_des, batch_state,
             #                                     batch_step)
-            loss_custom, loss_torques = criterion(batch_action_pred, batch_action, 
-                                                batch_x_des, batch_state)
+            loss_custom, loss_torques = criterion(batch_action_pred, batch_action,
+                                                batch_x_des, batch_x)
         else:
             loss_torques = criterion(batch_action_pred, batch_action)
             loss_custom = loss_torques
@@ -252,20 +262,21 @@ ds_file_name = config.ds_file_name
 
 # Model:
 joints_num = config.joints_num
-encoded_space_dim = config.state_dim
+encoded_space_dim = config.encoded_space_dim
 target_dim = config.coords_dim + config.onehot_dim
 action_dim = joints_num
+ee_dim = config.ee_dim
 
 # Training:
 use_baseline = False
 use_image = False
 use_custom_loss = config.use_custom_loss
-num_epochs = 5000 + 1 
+num_epochs = 7000 + 1
 batch_size = 128
 learning_rate = 3e-4
 validation_interval = 100
 num_trains = 10
-noise_std = 0.004
+noise_scale = 0.05 #* 4 # Fraction of std to use as noise
 
 if use_baseline:
     use_custom_loss = False
@@ -275,7 +286,7 @@ for i in range(7):
     train_info[f'mae_joint_{i+1}_val'] = []
     train_info[f'mae_joint_{i+1}_train'] = []
 
-for model_complexity in ['low', 'medium', 'high', 'xhigh']:
+for model_complexity in ['XXhigh']:#['low', 'medium', 'high', 'xhigh']:
     enc_hid, cont_hid, lin_hid, lin_out = config.get_model_dims(model_complexity)
     
     for i_train in range(num_trains):
@@ -284,8 +295,8 @@ for model_complexity in ['low', 'medium', 'high', 'xhigh']:
 
         model_name = config.get_model_name(use_baseline, use_custom_loss, use_image)
         
-        dataset = TrajectoryDataset(ds_root_dir, ds_file_name, 
-                                    joints_num, target_dim, use_image)
+        dataset = TrajectoryDataset(ds_root_dir, ds_file_name,
+                                    joints_num, target_dim, ee_dim, use_image)
         # train_set, val_set = torch.utils.data.random_split(dataset, [0.9, 0.1])
         split_file_path = os.path.join(ds_root_dir, config.train_val_file)
         split = torch.load(split_file_path)
@@ -298,6 +309,15 @@ for model_complexity in ['low', 'medium', 'high', 'xhigh']:
         print("train_set:", len(train_set))
         print("val_set:", len(val_set))
 
+        # Compute per-dimension statistics for ee_repr from training data
+        all_ee_repr = []
+        for idx in train_indices:
+            _, _, _, _, ee_repr = dataset[idx]
+            all_ee_repr.append(ee_repr)
+        all_ee_repr = np.array(all_ee_repr)
+        ee_repr_std = torch.tensor(all_ee_repr.std(axis=0)).to(device).float()
+        print(f"ee_repr std per dimension: {ee_repr_std}")
+
         if use_baseline:
             model = MLPBaseline(inp_dim=encoded_space_dim+target_dim, 
                                 lin_hid=lin_hid, lin_out=lin_out,
@@ -305,7 +325,7 @@ for model_complexity in ['low', 'medium', 'high', 'xhigh']:
         else:
             model = GeneralModel(encoded_space_dim=encoded_space_dim, target_dim=target_dim,
                                  enc_hid=enc_hid, cont_hid=cont_hid,
-                                 action_dim=action_dim, use_image=use_image)
+                                 action_dim=action_dim, use_image=use_image, ee_dim=ee_dim)
         m = model.to(device)
         num_params = sum(p.numel() for p in m.parameters())/1e3
         model_name += f"|{num_params}K_params"
@@ -372,28 +392,29 @@ for model_complexity in ['low', 'medium', 'high', 'xhigh']:
                 batch_state = batch_data[1].to(device).float()
                 batch_target_repr = batch_data[2].to(device).float()
                 batch_action = batch_data[3].to(device).float()
+                batch_ee_repr = batch_data[4].to(device).float()
 
-                batch_noise = torch.normal(mean=0.0, std=noise_std, #std=0.001
-                                        size=(batch_state.size()[0], encoded_space_dim)
-                                        ).to(device).float()
-                batch_state_noise = batch_state + batch_noise
-            
+                # Dimension-aware noise: scale by each dimension's std
+                batch_noise = torch.randn(batch_ee_repr.size()).to(device).float()
+                batch_noise = batch_noise * ee_repr_std * noise_scale
+                batch_ee_repr_noise = batch_ee_repr + batch_noise
+
                 optimizer.zero_grad()
                 if use_baseline:
-                    nn_input = torch.cat((batch_target_repr, batch_state_noise), dim=1)
+                    nn_input = torch.cat((batch_target_repr, batch_state), dim=1)
                     batch_action_pred_noise = model(nn_input)
                 else:
-                    batch_action_pred_noise , batch_x_des_noise, \
-                        batch_diff_noise  = model(batch_target_repr, batch_state_noise)
+                    batch_action_pred_noise, batch_x_des_noise, batch_x_noise, \
+                        batch_diff_noise = model(batch_target_repr, batch_ee_repr_noise)
 
-                # TODO: Think about it.
-                batch_action_noise = batch_action - batch_noise[:, :joints_num]
+                # No noise adjustment for action since ee_repr noise doesn't directly affect action
+                batch_action_noise = batch_action
 
                 if use_custom_loss:
-                    # loss_custom, loss_torques = criterion(batch_action_pred_noise, batch_action_noise, 
+                    # loss_custom, loss_torques = criterion(batch_action_pred_noise, batch_action_noise,
                     #                                       batch_x_des_noise, batch_state, batch_step)
-                    loss_custom, loss_torques = criterion(batch_action_pred_noise, batch_action_noise, 
-                                                        batch_x_des_noise, batch_state)
+                    loss_custom, loss_torques = criterion(batch_action_pred_noise, batch_action_noise,
+                                                        batch_x_des_noise, batch_x_noise)
                 else:
                     loss_torques = criterion(batch_action_pred_noise, batch_action_noise)
                     loss_custom = loss_torques

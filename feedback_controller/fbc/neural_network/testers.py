@@ -6,6 +6,8 @@ from nn_models import GeneralModel, MLPBaseline
 import torch.nn as nn
 import math
 import os
+import pickle
+from scipy.spatial.transform import Rotation
 from config import Config
 
 
@@ -18,15 +20,27 @@ class Tester():
         self.step_size = self.config.step_dim
         self.target_size = self.config.coords_dim
         self.onehot_size = self.config.onehot_dim
-        
+        self.ee_dim = self.config.ee_dim
+
         self.cur_file_dir_path = os.path.dirname(__file__)
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-        # self.load_model(train_no=0, epoch_no=0, 
+        # Load euler normalization stats for ee_repr computation
+        euler_stats_path = os.path.join(self.cur_file_dir_path,
+            f'data/torobo/{self.config.dataset_name}/euler_norm_stats_{self.config.ds_ratio}.pkl')
+        with open(euler_stats_path, 'rb') as f:
+            euler_stats = pickle.load(f)
+        self.euler_mean = euler_stats['euler_mean']
+        self.euler_std = euler_stats['euler_std']
+
+        # Fixed torso joint values
+        self.qtorso = np.array([9.71605396e-06, 6.01925199e-05])
+
+        # self.load_model(train_no=0, epoch_no=0,
         #                 use_custom_loss=self.config.use_custom_loss,
         #                 model_complexity='high')
-        
-        dataset_path = os.path.join(self.cur_file_dir_path, 
+
+        dataset_path = os.path.join(self.cur_file_dir_path,
                                     f'data/torobo/{self.config.dataset_name}/{self.config.ds_test_file}')
         self.dataset = np.load(dataset_path, allow_pickle=True, encoding='latin1')
         print("Tester loaded dataset with shape:", self.dataset.shape)
@@ -39,10 +53,10 @@ class Tester():
     def load_model(self, train_no, epoch_no, use_custom_loss, model_complexity):
 
         enc_hid, cont_hid, lin_hid, lin_out = self.config.get_model_dims(model_complexity)
-        self.model = GeneralModel(self.state_size, self.target_size+self.onehot_size, 
+        self.model = GeneralModel(self.config.encoded_space_dim, self.target_size+self.onehot_size,
                                   self.joint_size,
-                                  enc_hid, cont_hid, 
-                                  use_image=False)
+                                  enc_hid, cont_hid,
+                                  use_image=False, ee_dim=self.ee_dim)
         self.baseline = MLPBaseline(self.state_size + (self.target_size+self.onehot_size),
                                     lin_hid, lin_out,
                                     self.joint_size)
@@ -69,34 +83,66 @@ class Tester():
         self.model.load_state_dict(torch.load(dnfc_path, 
                                               map_location=torch.device(self.device),
                                               weights_only=True))
-        self.baseline.load_state_dict(torch.load(base_path, 
-                                                 map_location=torch.device(self.device),
-                                                 weights_only=True))
+        # self.baseline.load_state_dict(torch.load(base_path, 
+        #                                          map_location=torch.device(self.device),
+        #                                          weights_only=True))
         print("***\nLoaded model weights from", dnfc_path)
-        print("Loaded baseline weights from", base_path)
+        # print("Loaded baseline weights from", base_path)
+
+    def compute_ee_pose(self, joint_vals):
+        """Compute end-effector position and normalized euler angles from joint values."""
+        q9 = np.concatenate((self.qtorso, np.array(joint_vals)), axis=0)
+        p, R = self.kin.forwardkin(1, q9)
+        euler = Rotation.from_matrix(R).as_euler('xyz', degrees=False)
+        euler_norm = (euler - self.euler_mean) / (self.euler_std + 1e-8)
+        return p, euler_norm
+
+    def compute_ee_repr(self, joint_vals_curr, joint_vals_prev):
+        """Compute 12D ee_repr from current and previous joint values."""
+        p_curr, euler_norm_curr = self.compute_ee_pose(joint_vals_curr)
+        p_prev, euler_norm_prev = self.compute_ee_pose(joint_vals_prev)
+        ee_repr = np.concatenate([p_curr, euler_norm_curr, p_prev, euler_norm_prev])
+        return ee_repr
 
 
-    def get_delta_ang_offline(self,usebaseline,num):
-        y1,y2,y3,y4,y5,y6,y7=[],[],[],[],[],[],[]
-        elem=self.dataset[num]
+    def get_delta_ang_offline(self, usebaseline, num):
+        y1, y2, y3, y4, y5, y6, y7 = [], [], [], [], [], [], []
+        elem = self.dataset[num]
 
         if usebaseline:
             self.baseline.eval()
         else:
             self.model.eval()
 
+        # Initialize previous joints for ee_repr computation
+        prev_joints = elem[0][self.step_size:self.step_size+self.joint_size]
+
         for i in range(299):
-            input_tensor=torch.tensor(elem[i][self.step_size:self.step_size+self.state_size].tolist())
-            
-            # input_tensor=torch.cat((joint_angles_tensor,velocities_tensor),dim=0)
-            goal=elem[i][self.step_size+self.state_size+self.joint_size:].tolist()
-            goal_tensor=torch.tensor(goal)
+            state = elem[i][self.step_size:self.step_size+self.state_size]
+            curr_joints = state[:self.joint_size]
+
+            goal = elem[i][self.step_size+self.state_size:
+                          self.step_size+self.state_size+self.target_size+self.onehot_size].tolist()
+            goal_tensor = torch.tensor(goal).to(self.device).float()
+            goal_nn = torch.unsqueeze(goal_tensor, 0)
+
             if usebaseline:
-                all=torch.cat((goal_tensor, input_tensor),dim=0)
-                velocities_tensor=self.baseline(all)
+                input_tensor = torch.tensor(state.tolist()).to(self.device).float()
+                state_nn = torch.unsqueeze(input_tensor, 0)
+                basel_input = torch.cat((goal_nn, state_nn), dim=1)
+                velocities_tensor = self.baseline(basel_input)
+                velocities_tensor = torch.squeeze(velocities_tensor, 0)
             else:
-                velocities_tensor=self.model(goal_tensor, input_tensor)[0]
-                
+                # Compute ee_repr from current and previous joint positions
+                ee_repr_np = self.compute_ee_repr(curr_joints, prev_joints)
+                ee_repr = torch.tensor(ee_repr_np).to(self.device).float()
+                ee_repr_nn = torch.unsqueeze(ee_repr, 0)
+                velocities_tensor, _, _, _ = self.model(goal_nn, ee_repr_nn)
+                velocities_tensor = torch.squeeze(velocities_tensor, 0)
+
+            # Update previous joints for next iteration
+            prev_joints = curr_joints
+
             y1.append(float(velocities_tensor[0]))
             y2.append(float(velocities_tensor[1]))
             y3.append(float(velocities_tensor[2]))
@@ -105,8 +151,7 @@ class Tester():
             y6.append(float(velocities_tensor[5]))
             y7.append(float(velocities_tensor[6]))
 
-
-        return y1,y2,y3,y4,y5,y6,y7
+        return y1, y2, y3, y4, y5, y6, y7
     
 
     def get_emulated(self, use_baseline, num, use_angle=False, return_path_point=False):
@@ -153,22 +198,35 @@ class Tester():
             self.baseline.eval()
         else:
             self.model.eval()
-        
+
+        # Initialize previous joints for ee_repr computation
+        prev_joints = state[:self.joint_size].detach().cpu().numpy()
+
         for i in range(self.dataset.shape[1]):
             goal_tensor = torch.tensor(goal + one_hot).to(self.device)
             goal_nn = torch.unsqueeze(goal_tensor, 0)
-            state_nn = torch.unsqueeze(state, 0)
+
+            # Compute ee_repr from current and previous joint positions
+            curr_joints = state[:self.joint_size].detach().cpu().numpy()
+            ee_repr_np = self.compute_ee_repr(curr_joints, prev_joints)
+            ee_repr = torch.tensor(ee_repr_np).to(self.device).float()
+            ee_repr_nn = torch.unsqueeze(ee_repr, 0)
+
             if use_baseline:
+                state_nn = torch.unsqueeze(state, 0)
                 basel_input = torch.cat((goal_nn, state_nn), dim=1)
                 velocities_tensor = self.baseline(basel_input)
             else:
-                velocities_tensor, x_des, _ = self.model(goal_nn, state_nn)
+                velocities_tensor, x_des, x, _ = self.model(goal_nn, ee_repr_nn)
 
             velocities_tensor = torch.squeeze(velocities_tensor, 0)
             print_it_out = out
 
             state[:7] += velocities_tensor
             state[7:] = velocities_tensor
+
+            # Update previous joints for next iteration
+            prev_joints = curr_joints
 
             if path_point==0 and self.close_enough(state, grepB):
                 # print(i)
@@ -218,72 +276,94 @@ class Tester():
             return y1,y2,y3,y4,y5,y6,y7
         
 
-    def get_emulated_s(self,usebaseline,num,use_angle=False,return_path_point=False):
+    def get_emulated_s(self, usebaseline, num, use_angle=False, return_path_point=False):
 
-        y1,y2,y3,y4,y5,y6,y7=[],[],[],[],[],[],[]
-        elem=self.dataset[num]
+        y1, y2, y3, y4, y5, y6, y7 = [], [], [], [], [], [], []
+        elem = self.dataset[num]
         print(num)
-        state=torch.tensor(elem[0][1:1+self.state_size].tolist())
+        state = torch.tensor(elem[0][1:1+self.state_size].tolist()).to(self.device)
 
-        goal=elem[0][self.step_size+self.state_size+self.joint_size:self.step_size+self.state_size+self.joint_size+9].tolist()
-        one_hot=elem[0][self.step_size+self.state_size+self.joint_size+9:].tolist()
-        milestones=self.get_changes_indexes(num)
-        path_point=0
-        # print(milestones)
-        points=[]
+        goal = elem[0][self.step_size+self.state_size:
+                       self.step_size+self.state_size+self.target_size].tolist()
+        one_hot = elem[0][self.step_size+self.state_size+self.target_size:
+                         self.step_size+self.state_size+self.target_size+self.onehot_size].tolist()
+        milestones = self.get_changes_indexes(num)
+        path_point = 0
+        points = []
         points.append(goal[:3])
         points.append(goal[3:6])
         points.append(goal[6:9])
 
-        milestone_js=[torch.tensor(elem[milestones[0]-1][1:8].tolist()),torch.tensor(elem[milestones[1]-1][1:8].tolist()),torch.tensor(elem[milestones[2]-1][1:8].tolist()),torch.tensor(elem[milestones[3]-1][1:8].tolist())]
+        milestone_js = [
+            torch.tensor(elem[milestones[0]-1][1:8].tolist()),
+            torch.tensor(elem[milestones[1]-1][1:8].tolist()),
+            torch.tensor(elem[milestones[2]-1][1:8].tolist()),
+            torch.tensor(elem[milestones[3]-1][1:8].tolist())
+        ]
         print(goal)
         if usebaseline:
             self.baseline.eval()
         else:
             self.model.eval()
-        
+
+        # Initialize previous joints for ee_repr computation
+        prev_joints = state[:self.joint_size].detach().cpu().numpy()
+
         for i in range(299):
-            goal_tensor=torch.tensor(goal+one_hot)
+            goal_tensor = torch.tensor(goal + one_hot).to(self.device).float()
+            goal_nn = torch.unsqueeze(goal_tensor, 0)
+
+            # Compute ee_repr from current and previous joint positions
+            curr_joints = state[:self.joint_size].detach().cpu().numpy()
+            ee_repr_np = self.compute_ee_repr(curr_joints, prev_joints)
+            ee_repr = torch.tensor(ee_repr_np).to(self.device).float()
+            ee_repr_nn = torch.unsqueeze(ee_repr, 0)
 
             if usebaseline:
-                all=torch.cat((goal_tensor, state),dim=0)
-                velocities_tensor=self.baseline(all)
+                state_nn = torch.unsqueeze(state, 0)
+                basel_input = torch.cat((goal_nn, state_nn), dim=1)
+                velocities_tensor = self.baseline(basel_input)
             else:
-                velocities_tensor,x_des=self.model(goal_tensor, state)[0:2]
+                velocities_tensor, x_des, x, _ = self.model(goal_nn, ee_repr_nn)
 
-            
-            state[:7]+=velocities_tensor
-            state[7:]=velocities_tensor
-            if path_point==0 and self.close_enough(state[:7],milestone_js[0]):
-                # print(i)
-                path_point=1
-                one_hot=[1,0,0,0]
+            velocities_tensor = torch.squeeze(velocities_tensor, 0)
+
+            state[:7] += velocities_tensor
+            state[7:] = velocities_tensor
+
+            # Update previous joints for next iteration
+            prev_joints = curr_joints
+
+            if path_point == 0 and self.close_enough(state[:7], milestone_js[0]):
+                path_point = 1
+                one_hot = [1, 0, 0, 0]
                 print(x_des)
                 print(self.get_end_eff(x_des))
                 points.append(self.get_end_eff(x_des))
-            elif path_point==1 and self.close_enough(state[:7],milestone_js[1]):
-                path_point=2
-                one_hot=[0,1,0,0]
+            elif path_point == 1 and self.close_enough(state[:7], milestone_js[1]):
+                path_point = 2
+                one_hot = [0, 1, 0, 0]
                 print(x_des)
                 print(self.get_end_eff(x_des))
                 points.append(self.get_end_eff(x_des))
-            elif path_point==2 and self.close_enough(state[:7],milestone_js[2]):
-                path_point=3
-                one_hot=[0,0,1,0]           
+            elif path_point == 2 and self.close_enough(state[:7], milestone_js[2]):
+                path_point = 3
+                one_hot = [0, 0, 1, 0]
                 print(x_des)
                 print(self.get_end_eff(x_des))
                 points.append(self.get_end_eff(x_des))
-            elif path_point==3 and self.close_enough(state[:7],milestone_js[3]):
-                path_point=4
-                one_hot=[0,0,0,1]   
+            elif path_point == 3 and self.close_enough(state[:7], milestone_js[3]):
+                path_point = 4
+                one_hot = [0, 0, 0, 1]
                 print(x_des)
                 print(self.get_end_eff(x_des))
                 points.append(self.get_end_eff(x_des))
+
             if use_angle:
-                add=velocities_tensor
+                add = velocities_tensor
             else:
-                add=state
-                
+                add = state
+
             y1.append(float(add[0]))
             y2.append(float(add[1]))
             y3.append(float(add[2]))
