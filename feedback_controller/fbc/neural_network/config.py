@@ -8,10 +8,10 @@ class Config:
         self.v_name = "2+2l_lat:sub-nvel" #"6l_linear" #"v_custl_mse"
         self.v_name_base = "3l_base" #"4l_base"
 
-        self.episodes_num_ds = 72 #500 #360 #2000
+        self.episodes_num_ds = 500 #72 #500 #360 #2000
         self.dataset_name = f"trajs:{self.episodes_num_ds}_blocks:3" +\
-            "_triangle_v_scarce" #"_random"
-        self.ds_ratio = "interp_0.85" #"extrap_0.85" #"interp_0.95" #0.263
+            "_random" #"_triangle_v_scarce"
+        self.ds_ratio = "interp_0.95" #"interp_0.85" #"extrap_0.85" #"interp_0.95" #0.263
         self.ds_file_name = f'train_{self.ds_ratio}.npy'
         self.ds_ratio_test = self.ds_ratio #"interp_0.85"
         self.ds_test_file = f'test_{self.ds_ratio_test}.npy'
@@ -134,12 +134,12 @@ class Config:
         """Returns (n_layer, n_head, n_emb, p_drop_attn, n_cond_layers, ff_mult) for transformer diffusion based on complexity"""
         if model_complexity == 'minimal':
             # Minimal model: ~24K params to match MLP baseline
-            n_layer = 2
-            n_head = 2
+            n_layer = 1
+            n_head = 1
             n_emb = 32
-            p_drop_attn = 0.0
+            p_drop_attn = 0.1
             n_cond_layers = 0
-            ff_mult = 1
+            ff_mult = 4
         elif model_complexity == 'low':
             n_layer = 2
             n_head = 2

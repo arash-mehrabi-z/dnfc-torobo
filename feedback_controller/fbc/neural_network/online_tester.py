@@ -605,7 +605,7 @@ kin = TorKin()
 epoch_no = 5000 #15000
 train_num = 10 #10
 
-for model_complexity in ['xhigh', 'medium', 'low']: #['low', 'medium', 'high', 'xhigh']:
+for model_complexity in ['medium', 'low']: #['low', 'medium', 'high', 'xhigh']:
     # tester.load_diffusion_model(0, epoch_no, model_complexity)
     tester.load_diffusion_transformer_model(0, epoch_no, model_complexity)
     params_num = tester.config.get_params_num(tester.diffusion_transformer_model)
