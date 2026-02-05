@@ -230,3 +230,52 @@ class MLPBaseline(nn.Module):
 
         act_preds = F.tanh(act_preds)
         return act_preds
+
+
+class ImageStackEncoder(nn.Module):
+    """CNN encoder for a stack of consecutive RGB images."""
+    def __init__(self, num_images, encoded_dim):
+        super().__init__()
+        in_channels = num_images * 3
+        self.cnn = nn.Sequential(
+            nn.Conv2d(in_channels, 32, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(True),
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(True),
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(True),
+            nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(True),
+            nn.AdaptiveAvgPool2d(1),
+        )
+        self.flatten = nn.Flatten(start_dim=1)
+        self.fc = nn.Linear(128, encoded_dim)
+
+    def forward(self, x):
+        x = self.cnn(x)
+        x = self.flatten(x)
+        x = self.fc(x)
+        return x
+
+
+class TwoStreamBaseline(nn.Module):
+    def __init__(self, target_dim, mlp_hidden, mlp_latent,
+                 num_images, cnn_latent,
+                 decoder_hidden, action_dim):
+        super().__init__()
+        self.mlp_encoder = MLP_2L(target_dim, mlp_hidden, mlp_latent)
+        self.cnn_encoder = ImageStackEncoder(num_images, cnn_latent)
+        self.decoder = nn.Sequential(
+            nn.Linear(mlp_latent + cnn_latent, decoder_hidden),
+            nn.ReLU(True),
+            nn.Linear(decoder_hidden, action_dim),
+        )
+        self.decoder[-1].bias.data.fill_(0.0)
+
+    def forward(self, target_repr, image_stack):
+        mlp_out = self.mlp_encoder(target_repr)
+        cnn_out = self.cnn_encoder(image_stack)
+        combined = torch.cat((mlp_out, cnn_out), dim=1)
+        action_pred = self.decoder(combined)
+        action_pred = F.tanh(action_pred)
+        return action_pred

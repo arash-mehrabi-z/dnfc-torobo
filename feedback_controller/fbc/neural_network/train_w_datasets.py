@@ -21,6 +21,7 @@ from torch.utils.data import DataLoader, Subset
 
 from nn_models import GeneralModel
 from nn_models import MLPBaseline
+from nn_models import TwoStreamBaseline
 from nn_models import CustomLoss, KLLoss
 
 from config import Config
@@ -81,7 +82,62 @@ class TrajectoryDataset(Dataset):
             target_repr = target_repr
 
         return step, state, target_repr, action
-    
+
+
+class TwoStreamDataset(Dataset):
+    def __init__(self, ds_root_dir, file_name, joint_dim, target_dim,
+                 num_history_images=4, image_size=(128, 128)):
+        self.joint_dim = joint_dim
+        self.state_dim = 2 * joint_dim
+        self.target_dim = target_dim
+        self.ds_root_dir = ds_root_dir
+        self.num_history_images = num_history_images
+
+        data_file_path = os.path.join(ds_root_dir, file_name)
+        self.trajectories = np.load(data_file_path)
+        print("loaded data from", data_file_path)
+        print("trajectories.shape", self.trajectories.shape)
+
+        self.num_trajectories = self.trajectories.shape[0]
+        self.num_steps = self.trajectories.shape[1]
+
+        self.transform = transforms.Compose([
+            transforms.Resize(image_size),
+            transforms.ToTensor(),
+        ])
+        self.img_dir = os.path.join(ds_root_dir, "triangle_images")
+
+    def __len__(self):
+        return self.num_trajectories * self.num_steps
+
+    def __getitem__(self, idx):
+        traj_no = idx // self.num_steps
+        step_no = idx % self.num_steps
+
+        step = self.trajectories[traj_no, step_no, 0]
+        state = self.trajectories[traj_no, step_no, 1:1+self.state_dim]
+
+        target_start = 1 + self.state_dim
+        target_end = target_start + self.target_dim
+        target_repr = self.trajectories[traj_no, step_no, target_start:target_end]
+
+        action = self.trajectories[traj_no, step_no, -self.joint_dim:]
+
+        # Load last num_history_images images (including current)
+        images = []
+        for i in range(self.num_history_images - 1, -1, -1):
+            img_step = max(0, step_no - i)
+            img_path = os.path.join(
+                self.img_dir,
+                f"traj_{traj_no:03d}/step_{img_step:03d}.jpg")
+            image = Image.open(img_path).convert('RGB')
+            image = self.transform(image)
+            images.append(image)
+
+        image_stack = torch.cat(images, dim=0)  # (num_images * 3, H, W)
+
+        return step, state, target_repr, image_stack, action
+
 
 def log_loss(n, val_loss_cutsom, val_loss_torques):
     global weights_storage_root_dir
@@ -105,7 +161,7 @@ def log_loss(n, val_loss_cutsom, val_loss_torques):
 def run_test(n):
     global val_dataloader, model, criterion, weights_storage_root_dir
     global val_losses_custom, val_losses_torques
-    global use_custom_loss, use_baseline
+    global use_custom_loss, use_baseline, use_two_stream
     global train_info
 
     val_loss_cutsom = 0
@@ -114,15 +170,22 @@ def run_test(n):
         batch_step = batch_data[0].to(device).float()
         batch_state = batch_data[1].to(device).float()
         batch_target_repr = batch_data[2].to(device).float()
-        batch_action = batch_data[3].to(device).float()
+
+        if use_two_stream:
+            batch_images = batch_data[3].to(device).float()
+            batch_action = batch_data[4].to(device).float()
+        else:
+            batch_action = batch_data[3].to(device).float()
 
         model.eval()
         with torch.no_grad():
-            if use_baseline:
+            if use_two_stream:
+                batch_action_pred = model(batch_target_repr, batch_images)
+            elif use_baseline:
                 nn_input = torch.cat((batch_target_repr, batch_state), dim=1)
                 batch_action_pred = model(nn_input)
             else:
-                batch_action_pred, batch_x_des, batch_diff = model(batch_target_repr, 
+                batch_action_pred, batch_x_des, batch_diff = model(batch_target_repr,
                                                                    batch_state)
             
         if use_custom_loss:
@@ -259,15 +322,16 @@ action_dim = joints_num
 # Training:
 use_baseline = False
 use_image = False
+use_two_stream = True
 use_custom_loss = config.use_custom_loss
-num_epochs = 5000 + 1 
+num_epochs = 100000 + 1 
 batch_size = 128
-learning_rate = 3e-4
+learning_rate = 3e-3
 validation_interval = 100
 num_trains = 10
 noise_std = 0.004
 
-if use_baseline:
+if use_baseline or use_two_stream:
     use_custom_loss = False
 
 train_info = dict()
@@ -275,31 +339,50 @@ for i in range(7):
     train_info[f'mae_joint_{i+1}_val'] = []
     train_info[f'mae_joint_{i+1}_train'] = []
 
-for model_complexity in ['low', 'medium', 'high', 'xhigh']:
+for model_complexity in ['high']: #'low', 'medium', 'high', 'xhigh']:
     enc_hid, cont_hid, lin_hid, lin_out = config.get_model_dims(model_complexity)
     
     for i_train in range(num_trains):
         fig_1 = plt.figure(figsize=(12.8, 9.6))
         fig_2 = plt.figure(figsize=(12.8, 9.6))
 
-        model_name = config.get_model_name(use_baseline, use_custom_loss, use_image)
+        model_name = config.get_model_name(use_baseline, use_custom_loss, use_image,
+                                           use_two_stream)
         
-        dataset = TrajectoryDataset(ds_root_dir, ds_file_name, 
-                                    joints_num, target_dim, use_image)
-        # train_set, val_set = torch.utils.data.random_split(dataset, [0.9, 0.1])
-        split_file_path = os.path.join(ds_root_dir, config.train_val_file)
-        split = torch.load(split_file_path)
-        train_indices = split['train_indices']
-        val_indices = split['val_indices']
-        train_set = Subset(dataset, train_indices)
-        val_set = Subset(dataset, val_indices)
-        print(f"First five train_indices: {train_indices[:5]}")
-        print(f"First five val_indices: {val_indices[:5]}")
+        if use_two_stream:
+            dataset = TwoStreamDataset(ds_root_dir, ds_file_name,
+                                       joints_num, target_dim,
+                                       num_history_images=config.num_history_images,
+                                       image_size=config.image_size)
+        else:
+            dataset = TrajectoryDataset(ds_root_dir, ds_file_name,
+                                        joints_num, target_dim, use_image)
+        if use_two_stream:
+            train_set, val_set = torch.utils.data.random_split(dataset, [0.9, 0.1])
+        else:
+            # train_set, val_set = torch.utils.data.random_split(dataset, [0.9, 0.1])
+            split_file_path = os.path.join(ds_root_dir, config.train_val_file)
+            split = torch.load(split_file_path)
+            train_indices = split['train_indices']
+            val_indices = split['val_indices']
+            train_set = Subset(dataset, train_indices)
+            val_set = Subset(dataset, val_indices)
+            print(f"First five train_indices: {train_indices[:5]}")
+            print(f"First five val_indices: {val_indices[:5]}")
         print("train_set:", len(train_set))
         print("val_set:", len(val_set))
 
-        if use_baseline:
-            model = MLPBaseline(inp_dim=encoded_space_dim+target_dim, 
+        if use_two_stream:
+            mlp_hidden, mlp_latent, cnn_latent, decoder_hidden = \
+                config.get_two_stream_dims(model_complexity)
+            model = TwoStreamBaseline(target_dim=target_dim,
+                                      mlp_hidden=mlp_hidden, mlp_latent=mlp_latent,
+                                      num_images=config.num_history_images,
+                                      cnn_latent=cnn_latent,
+                                      decoder_hidden=decoder_hidden,
+                                      action_dim=action_dim)
+        elif use_baseline:
+            model = MLPBaseline(inp_dim=encoded_space_dim+target_dim,
                                 lin_hid=lin_hid, lin_out=lin_out,
                                 out_dim=action_dim)
         else:
@@ -371,23 +454,31 @@ for model_complexity in ['low', 'medium', 'high', 'xhigh']:
                 batch_step = batch_data[0].to(device).float()
                 batch_state = batch_data[1].to(device).float()
                 batch_target_repr = batch_data[2].to(device).float()
-                batch_action = batch_data[3].to(device).float()
+
+                if use_two_stream:
+                    batch_images = batch_data[3].to(device).float()
+                    batch_action = batch_data[4].to(device).float()
+                else:
+                    batch_action = batch_data[3].to(device).float()
 
                 batch_noise = torch.normal(mean=0.0, std=noise_std, #std=0.001
                                         size=(batch_state.size()[0], encoded_space_dim)
                                         ).to(device).float()
                 batch_state_noise = batch_state + batch_noise
-            
+
                 optimizer.zero_grad()
-                if use_baseline:
+                if use_two_stream:
+                    batch_action_pred_noise = model(batch_target_repr, batch_images)
+                    batch_action_noise = batch_action
+                elif use_baseline:
                     nn_input = torch.cat((batch_target_repr, batch_state_noise), dim=1)
                     batch_action_pred_noise = model(nn_input)
+                    batch_action_noise = batch_action - batch_noise[:, :joints_num]
                 else:
                     batch_action_pred_noise , batch_x_des_noise, \
                         batch_diff_noise  = model(batch_target_repr, batch_state_noise)
-
-                # TODO: Think about it.
-                batch_action_noise = batch_action - batch_noise[:, :joints_num]
+                    # TODO: Think about it.
+                    batch_action_noise = batch_action - batch_noise[:, :joints_num]
 
                 if use_custom_loss:
                     # loss_custom, loss_torques = criterion(batch_action_pred_noise, batch_action_noise, 

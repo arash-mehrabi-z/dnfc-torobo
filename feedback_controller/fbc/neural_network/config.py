@@ -5,13 +5,16 @@ class Config:
         self.num_steps = 299
         self.C = 1e-5
 
-        self.v_name = "2+2l_lat:sub-nvel" #"6l_linear" #"v_custl_mse"
-        self.v_name_base = "3l_base" #"4l_base" 
+        self.v_name = "img_enc" #"2+2l_lat:sub-nvel" #"6l_linear" #"v_custl_mse"
+        self.v_name_base = "3l_base" #"4l_base"
+        self.v_name_two_stream = "two_stream_base"
+        self.num_history_images = 4
+        self.image_size = (128, 128)
 
         self.episodes_num_ds = 72 #500 #360 #2000
         self.dataset_name = f"trajs:{self.episodes_num_ds}_blocks:3" +\
-            "_triangle_v_scarce" #"_random"
-        self.ds_ratio = "extrap_0.85" #"interp_0.95" #"interp_0.85" #0.263
+            "_tri_img" #"_triangle_v_scarce" #"_random"
+        self.ds_ratio = "ds" #"extrap_0.85" #"interp_0.95" #"interp_0.85" #0.263
         self.ds_file_name = f'train_{self.ds_ratio}.npy'
         self.ds_ratio_test = self.ds_ratio #"interp_0.85"
         self.ds_test_file = f'test_{self.ds_ratio_test}.npy'
@@ -28,14 +31,17 @@ class Config:
         # self.num_params_base = 24.091 #6.039 #36.109
 
         
-    def get_model_name(self, use_baseline, use_custom_loss, use_image):
-        if use_custom_loss: 
+    def get_model_name(self, use_baseline, use_custom_loss, use_image,
+                        use_two_stream=False):
+        if use_custom_loss:
             model_name = f"cus_los_{self.C}"
             # model_name = f"cus_los_const_mse_st"
         else: model_name = "mse_los"
-        if use_image: model_name += "|tar_img"
+        if use_two_stream: model_name += "|tar_cart+img"
+        elif use_image: model_name += "|tar_img"
         else: model_name += "|tar_cart"
-        if use_baseline: model_name += f"|base|{self.v_name_base}"
+        if use_two_stream: model_name += f"|{self.v_name_two_stream}"
+        elif use_baseline: model_name += f"|base|{self.v_name_base}"
         else: model_name += f"|{self.v_name}"
         return model_name
     
@@ -83,3 +89,29 @@ class Config:
             raise Exception("Model complexity is not defined.")
         
         return enc_hid, cont_hid, lin_hid, lin_out
+
+    def get_two_stream_dims(self, model_complexity):
+        if model_complexity == 'low':
+            mlp_hidden = 32
+            mlp_latent = 16
+            cnn_latent = 32
+            decoder_hidden = 32
+        elif model_complexity == 'medium':
+            mlp_hidden = 64
+            mlp_latent = 32
+            cnn_latent = 64
+            decoder_hidden = 64
+        elif model_complexity == 'high':
+            mlp_hidden = 128
+            mlp_latent = 64
+            cnn_latent = 128
+            decoder_hidden = 128
+        elif model_complexity == 'xhigh':
+            mlp_hidden = 256
+            mlp_latent = 128
+            cnn_latent = 256
+            decoder_hidden = 256
+        else:
+            raise Exception("Model complexity is not defined.")
+
+        return mlp_hidden, mlp_latent, cnn_latent, decoder_hidden
