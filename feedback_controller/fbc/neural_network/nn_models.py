@@ -177,51 +177,43 @@ class MLP_3L(nn.Module):
         
     
 class GeneralModel(nn.Module):
-    def __init__(self, encoded_space_dim, target_dim, action_dim,
-                 enc_hid, cont_hid, use_image, joint_dim=14):
+    """
+    Two-stream encoder model:
+    - Stream 1: Encodes target_repr (goal representation)
+    - Stream 2: Encodes ee_repr (N consecutive end-effector poses)
+    - Difference between encoded streams → controller → action
+    """
+    def __init__(self, encoded_space_dim, target_dim, ee_dim, action_dim,
+                 enc_hid, cont_hid, use_image):
         super().__init__()
         if use_image:
-            # self.enc = Encoder(encoded_space_dim)
-            self.enc = AlexNetPT(encoded_space_dim)
+            self.target_enc = AlexNetPT(encoded_space_dim)
         else:
-            # # 4-layer encoder for target: target_dim → enc_hid → enc_hid → enc_hid//2 → encoded_space_dim
-            # self.enc1_a = MLP_2L(target_dim, enc_hid, enc_hid)
-            # self.enc1_b = MLP_2L(enc_hid, enc_hid // 2, encoded_space_dim)
-            # # 4-layer encoder for joint states
-            # self.enc2_a = MLP_2L(joint_dim, enc_hid, enc_hid)
-            # self.enc2_b = MLP_2L(enc_hid, enc_hid // 2, encoded_space_dim)
-            self.enc1 = MLP_2L(target_dim, enc_hid, encoded_space_dim)
-            # self.enc2 = MLP_2L(joint_dim, enc_hid, encoded_space_dim)
+            # Target encoder: target_dim (13) → enc_hid → encoded_space_dim
+            self.target_enc = MLP_3L(target_dim, enc_hid, enc_hid // 2, encoded_space_dim)
 
-        # self.mlp_controller = MLP_3L(encoded_space_dim, cont_hid, cont_hid // 2, action_dim)
-        self.mlp_controller = MLP_2L(encoded_space_dim, cont_hid, action_dim)
-        # self.mlp_controller2 = MLP_2L(96, 32, action_dim)
-        # self.linear = nn.Sequential(
-        #     nn.Linear(encoded_space_dim, action_dim)
-        # )
-        self.mlp_controller.linear[-1].bias.data.fill_(0.0)
+        # EE pose encoder: ee_dim (6*N, e.g., 24 for N=4) → enc_hid → encoded_space_dim
+        self.ee_enc = MLP_3L(ee_dim, enc_hid, enc_hid // 2, encoded_space_dim)
 
-    def forward(self, target_repr, joint_state):
-        # Encode joint states (4 layers: enc2_a + enc2_b)
-        # x = self.enc2_a(joint_state)
-        # x = self.enc2_b(F.relu(x))  # (batch_size, encoded_space_dim)
-        # Encode target representation (4 layers: enc1_a + enc1_b)
-        # x_des = self.enc1_a(target_repr)
-        # x_des = self.enc1_b(F.relu(x_des))  # (batch_size, encoded_space_dim)
-        # x_des = self.enc2(F.relu(x_des)) # (batch_size, encoded_space_dim)
-        # x = self.enc2(joint_state)
-        x = joint_state
-        x_des = self.enc1(target_repr)
+        # Controller/decoder: takes difference and outputs action
+        self.controller = MLP_3L(encoded_space_dim, cont_hid, cont_hid // 2, action_dim)
+        self.controller.linear[-1].bias.data.fill_(0.0)
 
-        diff = x_des - x
-        inp_lat_mlp = diff
-        # inp_lat_mlp = torch.cat((diff, state), dim=1)
+    def forward(self, target_repr, ee_repr):
+        # Encode target (desired state representation)
+        x_des = self.target_enc(target_repr)  # (batch_size, encoded_space_dim)
 
-        acts_pred = self.mlp_controller(inp_lat_mlp)
-        # acts_pred = self.mlp_controller2(F.relu(acts_pred))
+        # Encode current EE pose history
+        x_curr = self.ee_enc(ee_repr)  # (batch_size, encoded_space_dim)
 
+        # Compute difference: where we want to be - where we are
+        diff = x_des - x_curr
+
+        # Decode to action
+        acts_pred = self.controller(diff)
         acts_pred = F.tanh(acts_pred)
-        return acts_pred, x_des, x, diff
+
+        return acts_pred, x_des, x_curr, diff
     
 
 class MLPBaseline(nn.Module):

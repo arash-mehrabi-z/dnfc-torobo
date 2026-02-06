@@ -31,11 +31,13 @@ from config import Config
 
 class TrajectoryDataset(Dataset):
     def __init__(self, ds_root_dir, file_name,
-                 joint_dim, target_dim, ee_dim=12, use_image=False):
+                 joint_dim, target_dim, num_consecutive_poses=1, use_image=False):
         self.joint_dim = joint_dim
         self.state_dim = 2 * joint_dim
         self.target_dim = target_dim
-        self.ee_dim = ee_dim
+        self.pose_dim = 6  # 3 pos + 3 euler_norm per pose
+        self.num_consecutive_poses = num_consecutive_poses
+        self.ee_dim = self.pose_dim * num_consecutive_poses
         self.ds_root_dir = ds_root_dir
         self.use_image = use_image
 
@@ -43,6 +45,7 @@ class TrajectoryDataset(Dataset):
         self.trajectories = np.load(data_file_path)#[0:4]
         print("loaded data from", data_file_path)
         print("trajectories.shape", self.trajectories.shape)
+        print(f"num_consecutive_poses: {num_consecutive_poses}, ee_dim: {self.ee_dim}")
 
         self.num_trajectories_in_dataset = self.trajectories.shape[0]
         self.num_steps = self.trajectories.shape[1]
@@ -70,10 +73,16 @@ class TrajectoryDataset(Dataset):
         action_end_idx = action_start_idx + self.joint_dim
         action = self.trajectories[traj_no, step_no, action_start_idx:action_end_idx]
 
-        # End-effector poses: 2 consecutive (pos + euler_norm) at indices 35:47
+        # End-effector pose: single pose (pos + euler_norm) stored at indices 35:41
+        # Stack N consecutive poses (current + N-1 previous) dynamically
         ee_start_idx = action_end_idx
-        ee_end_idx = ee_start_idx + self.ee_dim
-        ee_repr = self.trajectories[traj_no, step_no, ee_start_idx:ee_end_idx]
+        ee_end_idx = ee_start_idx + self.pose_dim
+        ee_poses = []
+        for k in range(self.num_consecutive_poses):
+            prev_step = max(step_no - k, 0)  # Clamp to 0 for early timesteps
+            pose = self.trajectories[traj_no, prev_step, ee_start_idx:ee_end_idx]
+            ee_poses.append(pose)
+        ee_repr = np.concatenate(ee_poses)  # Shape: (pose_dim * num_consecutive_poses,)
 
         if self.use_image:
             img_path = os.path.join(self.ds_root_dir,
@@ -133,7 +142,7 @@ def run_test(n):
                 batch_action_pred = model(nn_input)
             else:
                 batch_action_pred, batch_x_des, batch_x, batch_diff = model(batch_target_repr,
-                                                                             batch_state)
+                                                                             batch_ee_repr)
 
         if use_custom_loss:
             # loss_custom, loss_torques = criterion(batch_action_pred, batch_action,
@@ -265,17 +274,17 @@ joints_num = config.joints_num
 encoded_space_dim = config.encoded_space_dim
 target_dim = config.coords_dim + config.onehot_dim
 action_dim = joints_num
-ee_dim = config.ee_dim
+num_consecutive_poses = config.num_consecutive_poses  # 1-10, typically 4
 
 # Training:
 use_baseline = False
 use_image = False
 use_custom_loss = config.use_custom_loss
-num_epochs = 7000 + 1
-batch_size = 128
+num_epochs = 14000 + 1
+batch_size = 256
 learning_rate = 3e-4
 validation_interval = 100
-num_trains = 10
+num_trains = 3
 noise_scale = 0.05 #* 4 # Fraction of std to use as noise
 
 if use_baseline:
@@ -286,7 +295,7 @@ for i in range(7):
     train_info[f'mae_joint_{i+1}_val'] = []
     train_info[f'mae_joint_{i+1}_train'] = []
 
-for model_complexity in ['XXhigh']:#['low', 'medium', 'high', 'xhigh']:
+for model_complexity in ['high']:#['low', 'medium', 'high', 'xhigh']:
     enc_hid, cont_hid, lin_hid, lin_out = config.get_model_dims(model_complexity)
     
     for i_train in range(num_trains):
@@ -296,7 +305,7 @@ for model_complexity in ['XXhigh']:#['low', 'medium', 'high', 'xhigh']:
         model_name = config.get_model_name(use_baseline, use_custom_loss, use_image)
         
         dataset = TrajectoryDataset(ds_root_dir, ds_file_name,
-                                    joints_num, target_dim, ee_dim, use_image)
+                                    joints_num, target_dim, num_consecutive_poses, use_image)
         # train_set, val_set = torch.utils.data.random_split(dataset, [0.9, 0.1])
         split_file_path = os.path.join(ds_root_dir, config.train_val_file)
         split = torch.load(split_file_path)
@@ -329,8 +338,8 @@ for model_complexity in ['XXhigh']:#['low', 'medium', 'high', 'xhigh']:
                                 out_dim=action_dim)
         else:
             model = GeneralModel(encoded_space_dim=encoded_space_dim, target_dim=target_dim,
-                                 enc_hid=enc_hid, cont_hid=cont_hid,
-                                 action_dim=action_dim, use_image=use_image, joint_dim=2*joints_num)
+                                 ee_dim=dataset.ee_dim, action_dim=action_dim,
+                                 enc_hid=enc_hid, cont_hid=cont_hid, use_image=use_image)
         m = model.to(device)
         num_params = sum(p.numel() for p in m.parameters())/1e3
         model_name += f"|{num_params}K_params"
@@ -400,9 +409,9 @@ for model_complexity in ['XXhigh']:#['low', 'medium', 'high', 'xhigh']:
                 batch_ee_repr = batch_data[4].to(device).float()
 
                 # Dimension-aware noise: scale by each dimension's std
-                batch_noise = torch.randn(batch_state.size()).to(device).float()
-                batch_noise = batch_noise * joint_state_std * noise_scale
-                batch_state_noise = batch_state + batch_noise
+                batch_noise = torch.randn(batch_ee_repr.size()).to(device).float()
+                batch_noise = batch_noise * ee_repr_std * noise_scale
+                batch_ee_repr_noise = batch_ee_repr + batch_noise
 
                 optimizer.zero_grad()
                 if use_baseline:
@@ -410,7 +419,7 @@ for model_complexity in ['XXhigh']:#['low', 'medium', 'high', 'xhigh']:
                     batch_action_pred_noise = model(nn_input)
                 else:
                     batch_action_pred_noise, batch_x_des_noise, batch_x_noise, \
-                        batch_diff_noise = model(batch_target_repr, batch_state_noise)
+                        batch_diff_noise = model(batch_target_repr, batch_ee_repr_noise)
 
                 # No noise adjustment for action since joint_state noise doesn't directly affect action
                 batch_action_noise = batch_action
