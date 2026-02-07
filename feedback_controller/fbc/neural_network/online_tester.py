@@ -97,9 +97,10 @@ def online_test(tester:Tester, eps_num, use_baseline):
 
         state_nn = torch.unsqueeze(state, 0).float()
         if use_baseline:
-            basel_input = torch.cat((goal_nn, state_nn), dim=1)
             tester.baseline.eval()
-            velocities_tensor = tester.baseline(basel_input)
+            velocities_tensor, x_des, x, _ = tester.baseline(goal_nn, state_nn)
+            x_des = torch.squeeze(x_des, 0)
+            latent_reps.append(x_des.tolist())
         else:
             tester.model.eval()
             velocities_tensor, x_des, x, _ = tester.model(goal_nn, ee_repr_nn)

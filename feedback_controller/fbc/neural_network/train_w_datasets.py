@@ -138,8 +138,8 @@ def run_test(n):
         model.eval()
         with torch.no_grad():
             if use_baseline:
-                nn_input = torch.cat((batch_target_repr, batch_state), dim=1)
-                batch_action_pred = model(nn_input)
+                batch_action_pred, batch_x_des, batch_x, batch_diff = model(batch_target_repr,
+                                                                             batch_state)
             else:
                 batch_action_pred, batch_x_des, batch_x, batch_diff = model(batch_target_repr,
                                                                              batch_ee_repr)
@@ -277,7 +277,7 @@ action_dim = joints_num
 num_consecutive_poses = config.num_consecutive_poses  # 1-10, typically 4
 
 # Training:
-use_baseline = False
+use_baseline = True
 use_image = False
 use_custom_loss = config.use_custom_loss
 num_epochs = 14000 + 1
@@ -333,9 +333,11 @@ for model_complexity in ['high']:#['low', 'medium', 'high', 'xhigh']:
         print(f"joint_state std per dimension: {joint_state_std}")
 
         if use_baseline:
-            model = MLPBaseline(inp_dim=encoded_space_dim+target_dim,
-                                lin_hid=lin_hid, lin_out=lin_out,
-                                out_dim=action_dim)
+            model = MLPBaseline(target_dim=target_dim,
+                                state_dim=dataset.state_dim,
+                                action_dim=action_dim,
+                                enc_hid=enc_hid, cont_hid=cont_hid,
+                                use_image=use_image)
         else:
             model = GeneralModel(encoded_space_dim=encoded_space_dim, target_dim=target_dim,
                                  ee_dim=dataset.ee_dim, action_dim=action_dim,
@@ -413,10 +415,19 @@ for model_complexity in ['high']:#['low', 'medium', 'high', 'xhigh']:
                 batch_noise = batch_noise * ee_repr_std * noise_scale
                 batch_ee_repr_noise = batch_ee_repr + batch_noise
 
+                # # Noise for joint_state (used by baseline)
+                # batch_state_noise_raw = torch.randn(batch_state.size()).to(device).float()
+                # batch_state_noise = batch_state_noise_raw * joint_state_std * noise_scale
+                # batch_state_noisy = batch_state + batch_state_noise
+                batch_noise = torch.normal(mean=0.0, std=0.004, #std=0.001
+                                        size=(batch_state.size()[0], encoded_space_dim)
+                                        ).to(device).float()
+                batch_state_noisy = batch_state + batch_noise
+
                 optimizer.zero_grad()
                 if use_baseline:
-                    nn_input = torch.cat((batch_target_repr, batch_state), dim=1)
-                    batch_action_pred_noise = model(nn_input)
+                    batch_action_pred_noise, batch_x_des_noise, batch_x_noise, \
+                        batch_diff_noise = model(batch_target_repr, batch_state_noisy)
                 else:
                     batch_action_pred_noise, batch_x_des_noise, batch_x_noise, \
                         batch_diff_noise = model(batch_target_repr, batch_ee_repr_noise)

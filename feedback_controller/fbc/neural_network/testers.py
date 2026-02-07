@@ -63,9 +63,11 @@ class Tester():
             enc_hid=enc_hid,
             cont_hid=cont_hid,
             use_image=False)
-        self.baseline = MLPBaseline(self.state_size + (self.target_size+self.onehot_size),
-                                    lin_hid, lin_out,
-                                    self.joint_size)
+        self.baseline = MLPBaseline(target_dim=self.target_size + self.onehot_size,
+                                    state_dim=self.state_size,
+                                    action_dim=self.joint_size,
+                                    enc_hid=enc_hid, cont_hid=cont_hid,
+                                    use_image=False)
         
         m = self.model.to(self.device)
         model_name_dnfc = self.config.get_model_name(False, use_custom_loss, False)
@@ -154,8 +156,7 @@ class Tester():
             input_tensor = torch.tensor(state.tolist()).to(self.device).float()
             state_nn = torch.unsqueeze(input_tensor, 0)
             if usebaseline:
-                basel_input = torch.cat((goal_nn, state_nn), dim=1)
-                velocities_tensor = self.baseline(basel_input)
+                velocities_tensor, _, _, _ = self.baseline(goal_nn, state_nn)
                 velocities_tensor = torch.squeeze(velocities_tensor, 0)
             else:
                 velocities_tensor, _, _, _ = self.model(goal_nn, ee_repr_nn)
@@ -236,8 +237,7 @@ class Tester():
 
             state_nn = torch.unsqueeze(state, 0).float()
             if use_baseline:
-                basel_input = torch.cat((goal_nn, state_nn), dim=1)
-                velocities_tensor = self.baseline(basel_input)
+                velocities_tensor, x_des, x, _ = self.baseline(goal_nn, state_nn)
             else:
                 velocities_tensor, x_des, x, _ = self.model(goal_nn, ee_repr_nn)
 
@@ -344,8 +344,7 @@ class Tester():
 
             state_nn = torch.unsqueeze(state, 0).float()
             if usebaseline:
-                basel_input = torch.cat((goal_nn, state_nn), dim=1)
-                velocities_tensor = self.baseline(basel_input)
+                velocities_tensor, x_des, x, _ = self.baseline(goal_nn, state_nn)
             else:
                 velocities_tensor, x_des, x, _ = self.model(goal_nn, ee_repr_nn)
 

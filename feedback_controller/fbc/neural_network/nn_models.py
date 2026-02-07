@@ -217,21 +217,36 @@ class GeneralModel(nn.Module):
     
 
 class MLPBaseline(nn.Module):
-    def __init__(self, inp_dim, lin_hid, lin_out, out_dim):
+    """
+    Similar to GeneralModel but without encoding the state:
+    - Stream 1: Encodes target_repr (goal representation) -> x_des
+    - Stream 2: Uses joint_state directly (no encoding) as x_curr
+    - Difference between x_des and x_curr → controller → action
+    """
+    def __init__(self, target_dim, state_dim, action_dim, enc_hid, cont_hid, use_image=False):
         super().__init__()
-        # print("########", inp_dim)
-        self.linear_2l = MLP_2L(inp_dim, lin_hid, lin_out)
-        # self.linear_2l2 = MLP_2L(96*2, 2*2*inp_dim, out_dim)
-        self.linear = nn.Sequential(
-            # nn.Linear(int(270*(0.75)+10), out_dim)
-            nn.Linear(lin_out, out_dim)
-        )
-        self.linear[-1].bias.data.fill_(0.0)
+        if use_image:
+            self.target_enc = AlexNetPT(state_dim)  # Output matches state_dim
+        else:
+            # Target encoder: target_dim → enc_hid → state_dim
+            self.target_enc = MLP_3L(target_dim, enc_hid, enc_hid // 2, state_dim)
 
-    def forward(self, x):
-        act_preds = self.linear_2l(x)
-        # act_preds = self.linear_2l2(F.relu(act_preds))
-        act_preds = self.linear(F.relu(act_preds))
+        # Controller/decoder: takes difference (state_dim) and outputs action
+        self.controller = MLP_3L(state_dim, cont_hid, cont_hid // 2, action_dim)
+        self.controller.linear[-1].bias.data.fill_(0.0)
 
-        act_preds = F.tanh(act_preds)
-        return act_preds
+    def forward(self, target_repr, joint_state):
+        # Encode target (desired state representation)
+        x_des = self.target_enc(target_repr)  # (batch_size, state_dim)
+
+        # Use joint state directly as current state representation
+        x_curr = joint_state  # (batch_size, state_dim)
+
+        # Compute difference: where we want to be - where we are
+        diff = x_des - x_curr
+
+        # Decode to action
+        acts_pred = self.controller(diff)
+        acts_pred = F.tanh(acts_pred)
+
+        return acts_pred, x_des, x_curr, diff
