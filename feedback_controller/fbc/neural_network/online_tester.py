@@ -27,33 +27,8 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 cur_file_dir_path = os.path.dirname(__file__)
 config = Config()
 
-# Load euler normalization stats for ee_repr computation
-euler_stats_path = os.path.join(cur_file_dir_path,
-    f'data/torobo/{config.dataset_name}/euler_norm_stats_{config.ds_ratio}.pkl')
-with open(euler_stats_path, 'rb') as f:
-    euler_stats = pickle.load(f)
-euler_mean = euler_stats['euler_mean']
-euler_std = euler_stats['euler_std']
-
-# Fixed torso joint values
-qtorso = np.array([9.71605396e-06, 6.01925199e-05])
-
-
-def compute_ee_pose(kin, joint_vals):
-    """Compute end-effector position and normalized euler angles from joint values."""
-    q9 = np.concatenate((qtorso, np.array(joint_vals)), axis=0)
-    p, R = kin.forwardkin(1, q9)
-    euler = Rotation.from_matrix(R).as_euler('xyz', degrees=False)
-    euler_norm = (euler - euler_mean) / (euler_std + 1e-8)
-    return p, euler_norm
-
-
-def compute_ee_repr(kin, joint_vals_curr, joint_vals_prev):
-    """Compute 12D ee_repr from current and previous joint values."""
-    p_curr, euler_norm_curr = compute_ee_pose(kin, joint_vals_curr)
-    p_prev, euler_norm_prev = compute_ee_pose(kin, joint_vals_prev)
-    ee_repr = np.concatenate([p_curr, euler_norm_curr, p_prev, euler_norm_prev])
-    return ee_repr
+# Note: ee_repr computation now uses tester.compute_ee_repr() method
+# which handles N consecutive poses as defined in config.num_consecutive_poses
 
 
 def online_test(tester:Tester, eps_num, use_baseline):
@@ -101,8 +76,9 @@ def online_test(tester:Tester, eps_num, use_baseline):
     latent_reps = []
     all_states = []
 
-    # Initialize previous joints for ee_repr computation (use initial state)
-    prev_joints = state[:7].cpu().numpy()
+    # Initialize joint history for ee_repr computation (N consecutive poses)
+    init_joints = state[:7].cpu().numpy()
+    joint_history = [init_joints] * tester.num_consecutive_poses
 
     for i in range(traj_step_size):
         comm.which('\n dnfc in on step'+str(i)+'\n')
@@ -110,9 +86,12 @@ def online_test(tester:Tester, eps_num, use_baseline):
         goal_tensor = torch.tensor(goal+one_hot).to(device)
         goal_nn = torch.unsqueeze(goal_tensor, 0)
 
-        # Compute ee_repr from current and previous joint positions (kept but not used)
+        # Get current joints and update history
         curr_joints = state[:7].cpu().detach().numpy()
-        ee_repr_np = compute_ee_repr(kin, curr_joints, prev_joints)
+        joint_history = [curr_joints] + joint_history[:-1]
+
+        # Compute ee_repr from N consecutive joint positions
+        ee_repr_np = tester.compute_ee_repr(joint_history)
         ee_repr = torch.tensor(ee_repr_np).to(device).float()
         ee_repr_nn = torch.unsqueeze(ee_repr, 0)
 
@@ -123,7 +102,7 @@ def online_test(tester:Tester, eps_num, use_baseline):
             velocities_tensor = tester.baseline(basel_input)
         else:
             tester.model.eval()
-            velocities_tensor, x_des, x, _ = tester.model(goal_nn, state_nn)
+            velocities_tensor, x_des, x, _ = tester.model(goal_nn, ee_repr_nn)
             x_des = torch.squeeze(x_des, 0)
             latent_reps.append(x_des.tolist())
 
@@ -141,9 +120,6 @@ def online_test(tester:Tester, eps_num, use_baseline):
         # state = torch.cat((state[:7],velocities_tensor),dim=0)
         all_joints.append(state[:7])
         all_states.append(state.tolist())
-
-        # Update previous joints for next iteration's ee_repr
-        prev_joints = curr_joints
 
         pos = tester.get_end_eff(js.tolist())
         if one_hot[0]==1:
@@ -356,10 +332,10 @@ tester = Tester()
 kin = TorKin()
 
 use_only_dnfc = True
-epoch_no = 7000 #4000
-train_num = 1 #10
+epoch_no = 14000 #4000
+train_num = 3 #10
 
-for model_complexity in ['XXhigh']: #['low', 'medium', 'high', 'xhigh']: #['medium']:
+for model_complexity in ['high']: #['low', 'medium', 'high', 'xhigh']: #['medium']:
     # enc_hid, cont_hid, lin_hid, lin_out = config.get_model_dims(model_complexity)
     tester.load_model(0, 0, config.use_custom_loss, model_complexity)
     params_num = tester.config.get_params_num(tester.model)

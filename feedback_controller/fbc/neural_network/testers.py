@@ -20,7 +20,9 @@ class Tester():
         self.step_size = self.config.step_dim
         self.target_size = self.config.coords_dim
         self.onehot_size = self.config.onehot_dim
-        self.ee_dim = self.config.ee_dim
+        self.num_consecutive_poses = self.config.num_consecutive_poses
+        self.pose_dim = 6  # 3 pos + 3 euler_norm per pose
+        self.ee_dim = self.pose_dim * self.num_consecutive_poses
 
         self.cur_file_dir_path = os.path.dirname(__file__)
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -53,10 +55,14 @@ class Tester():
     def load_model(self, train_no, epoch_no, use_custom_loss, model_complexity):
 
         enc_hid, cont_hid, lin_hid, lin_out = self.config.get_model_dims(model_complexity)
-        self.model = GeneralModel(self.config.encoded_space_dim, self.target_size+self.onehot_size,
-                                  self.joint_size,
-                                  enc_hid, cont_hid,
-                                  use_image=False, joint_dim=self.state_size)
+        self.model = GeneralModel(
+            encoded_space_dim=self.config.encoded_space_dim,
+            target_dim=self.target_size + self.onehot_size,
+            ee_dim=self.ee_dim,
+            action_dim=self.joint_size,
+            enc_hid=enc_hid,
+            cont_hid=cont_hid,
+            use_image=False)
         self.baseline = MLPBaseline(self.state_size + (self.target_size+self.onehot_size),
                                     lin_hid, lin_out,
                                     self.joint_size)
@@ -89,6 +95,7 @@ class Tester():
         print("***\nLoaded model weights from", dnfc_path)
         # print("Loaded baseline weights from", base_path)
 
+
     def compute_ee_pose(self, joint_vals):
         """Compute end-effector position and normalized euler angles from joint values."""
         q9 = np.concatenate((self.qtorso, np.array(joint_vals)), axis=0)
@@ -96,13 +103,22 @@ class Tester():
         euler = Rotation.from_matrix(R).as_euler('xyz', degrees=False)
         euler_norm = (euler - self.euler_mean) / (self.euler_std + 1e-8)
         return p, euler_norm
+    
 
-    def compute_ee_repr(self, joint_vals_curr, joint_vals_prev):
-        """Compute 12D ee_repr from current and previous joint values."""
-        p_curr, euler_norm_curr = self.compute_ee_pose(joint_vals_curr)
-        p_prev, euler_norm_prev = self.compute_ee_pose(joint_vals_prev)
-        ee_repr = np.concatenate([p_curr, euler_norm_curr, p_prev, euler_norm_prev])
-        return ee_repr
+    def compute_ee_repr(self, joint_vals_history):
+        """Compute ee_repr from N consecutive joint values.
+
+        Args:
+            joint_vals_history: List of joint values, from current (index 0) to oldest.
+                               Length should be num_consecutive_poses.
+        Returns:
+            ee_repr: Concatenated poses, shape (6 * num_consecutive_poses,)
+        """
+        ee_poses = []
+        for joint_vals in joint_vals_history:
+            p, euler_norm = self.compute_ee_pose(joint_vals)
+            ee_poses.append(np.concatenate([p, euler_norm]))
+        return np.concatenate(ee_poses)
 
 
     def get_delta_ang_offline(self, usebaseline, num):
@@ -114,20 +130,24 @@ class Tester():
         else:
             self.model.eval()
 
-        # Initialize previous joints for ee_repr computation
-        prev_joints = elem[0][self.step_size:self.step_size+self.joint_size]
+        # Initialize joint history for ee_repr computation (N consecutive poses)
+        init_joints = elem[0][self.step_size:self.step_size+self.joint_size]
+        joint_history = [init_joints] * self.num_consecutive_poses
 
         for i in range(299):
             state = elem[i][self.step_size:self.step_size+self.state_size]
             curr_joints = state[:self.joint_size]
+
+            # Update history: insert current at front, remove oldest
+            joint_history = [curr_joints] + joint_history[:-1]
 
             goal = elem[i][self.step_size+self.state_size:
                           self.step_size+self.state_size+self.target_size+self.onehot_size].tolist()
             goal_tensor = torch.tensor(goal).to(self.device).float()
             goal_nn = torch.unsqueeze(goal_tensor, 0)
 
-            # Compute ee_repr from current and previous joint positions (kept but not used)
-            ee_repr_np = self.compute_ee_repr(curr_joints, prev_joints)
+            # Compute ee_repr from N consecutive joint positions
+            ee_repr_np = self.compute_ee_repr(joint_history)
             ee_repr = torch.tensor(ee_repr_np).to(self.device).float()
             ee_repr_nn = torch.unsqueeze(ee_repr, 0)
 
@@ -138,11 +158,8 @@ class Tester():
                 velocities_tensor = self.baseline(basel_input)
                 velocities_tensor = torch.squeeze(velocities_tensor, 0)
             else:
-                velocities_tensor, _, _, _ = self.model(goal_nn, state_nn)
+                velocities_tensor, _, _, _ = self.model(goal_nn, ee_repr_nn)
                 velocities_tensor = torch.squeeze(velocities_tensor, 0)
-
-            # Update previous joints for next iteration
-            prev_joints = curr_joints
 
             y1.append(float(velocities_tensor[0]))
             y2.append(float(velocities_tensor[1]))
@@ -200,16 +217,20 @@ class Tester():
         else:
             self.model.eval()
 
-        # Initialize previous joints for ee_repr computation
-        prev_joints = state[:self.joint_size].detach().cpu().numpy()
+        # Initialize joint history for ee_repr computation (N consecutive poses)
+        init_joints = state[:self.joint_size].detach().cpu().numpy()
+        joint_history = [init_joints] * self.num_consecutive_poses
 
         for i in range(self.dataset.shape[1]):
             goal_tensor = torch.tensor(goal + one_hot).to(self.device)
             goal_nn = torch.unsqueeze(goal_tensor, 0)
 
-            # Compute ee_repr from current and previous joint positions (kept but not used)
+            # Get current joints and update history
             curr_joints = state[:self.joint_size].detach().cpu().numpy()
-            ee_repr_np = self.compute_ee_repr(curr_joints, prev_joints)
+            joint_history = [curr_joints] + joint_history[:-1]
+
+            # Compute ee_repr from N consecutive joint positions
+            ee_repr_np = self.compute_ee_repr(joint_history)
             ee_repr = torch.tensor(ee_repr_np).to(self.device).float()
             ee_repr_nn = torch.unsqueeze(ee_repr, 0)
 
@@ -218,16 +239,13 @@ class Tester():
                 basel_input = torch.cat((goal_nn, state_nn), dim=1)
                 velocities_tensor = self.baseline(basel_input)
             else:
-                velocities_tensor, x_des, x, _ = self.model(goal_nn, state_nn)
+                velocities_tensor, x_des, x, _ = self.model(goal_nn, ee_repr_nn)
 
             velocities_tensor = torch.squeeze(velocities_tensor, 0)
             print_it_out = out
 
             state[:7] += velocities_tensor
             state[7:] = velocities_tensor
-
-            # Update previous joints for next iteration
-            prev_joints = curr_joints
 
             if path_point==0 and self.close_enough(state, grepB):
                 # print(i)
@@ -307,16 +325,20 @@ class Tester():
         else:
             self.model.eval()
 
-        # Initialize previous joints for ee_repr computation
-        prev_joints = state[:self.joint_size].detach().cpu().numpy()
+        # Initialize joint history for ee_repr computation (N consecutive poses)
+        init_joints = state[:self.joint_size].detach().cpu().numpy()
+        joint_history = [init_joints] * self.num_consecutive_poses
 
         for i in range(299):
             goal_tensor = torch.tensor(goal + one_hot).to(self.device).float()
             goal_nn = torch.unsqueeze(goal_tensor, 0)
 
-            # Compute ee_repr from current and previous joint positions (kept but not used)
+            # Get current joints and update history
             curr_joints = state[:self.joint_size].detach().cpu().numpy()
-            ee_repr_np = self.compute_ee_repr(curr_joints, prev_joints)
+            joint_history = [curr_joints] + joint_history[:-1]
+
+            # Compute ee_repr from N consecutive joint positions
+            ee_repr_np = self.compute_ee_repr(joint_history)
             ee_repr = torch.tensor(ee_repr_np).to(self.device).float()
             ee_repr_nn = torch.unsqueeze(ee_repr, 0)
 
@@ -325,15 +347,12 @@ class Tester():
                 basel_input = torch.cat((goal_nn, state_nn), dim=1)
                 velocities_tensor = self.baseline(basel_input)
             else:
-                velocities_tensor, x_des, x, _ = self.model(goal_nn, state_nn)
+                velocities_tensor, x_des, x, _ = self.model(goal_nn, ee_repr_nn)
 
             velocities_tensor = torch.squeeze(velocities_tensor, 0)
 
             state[:7] += velocities_tensor
             state[7:] = velocities_tensor
-
-            # Update previous joints for next iteration
-            prev_joints = curr_joints
 
             if path_point == 0 and self.close_enough(state[:7], milestone_js[0]):
                 path_point = 1
@@ -443,7 +462,7 @@ class Tester():
         dist = np.linalg.norm(p1-p2)
         # print(p1, p2, dist)
         # if (self.criterion_mse(torch.tensor(p1), torch.tensor(p2))**0.5) <= 0.0001: 
-        if dist <= 0.015:#0.02:
+        if dist <= 0.015: #0.03 :#0.02:
             return True
         return False
 
