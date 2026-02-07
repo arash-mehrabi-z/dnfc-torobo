@@ -8,13 +8,13 @@ class Config:
         self.v_name = "img_enc" #"2+2l_lat:sub-nvel" #"6l_linear" #"v_custl_mse"
         self.v_name_base = "3l_base" #"4l_base"
         self.v_name_two_stream = "two_stream_base"
-        self.num_history_images = 4
-        self.image_size = (128, 128)
+        self.num_history_images = 3
+        self.image_size = (64, 64)
 
         self.episodes_num_ds = 72 #500 #360 #2000
         self.dataset_name = f"trajs:{self.episodes_num_ds}_blocks:3" +\
             "_tri_img" #"_triangle_v_scarce" #"_random"
-        self.ds_ratio = "ds" #"extrap_0.85" #"interp_0.95" #"interp_0.85" #0.263
+        self.ds_ratio = "interp_0.85" #"ds" #"extrap_0.85" #"interp_0.95" #0.263
         self.ds_file_name = f'train_{self.ds_ratio}.npy'
         self.ds_ratio_test = self.ds_ratio #"interp_0.85"
         self.ds_test_file = f'test_{self.ds_ratio_test}.npy'

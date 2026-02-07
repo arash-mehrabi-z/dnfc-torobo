@@ -86,7 +86,19 @@ class TrajectoryDataset(Dataset):
 
 class TwoStreamDataset(Dataset):
     def __init__(self, ds_root_dir, file_name, joint_dim, target_dim,
-                 num_history_images=4, image_size=(128, 128)):
+                 num_history_images=4, image_size=(128, 128),
+                 traj_indices=None):
+        """
+        Args:
+            ds_root_dir: Root directory containing data files and images
+            file_name: Name of the .npy data file
+            joint_dim: Number of joints
+            target_dim: Dimension of target representation
+            num_history_images: Number of consecutive images to stack
+            image_size: Resize images to this size
+            traj_indices: Array mapping dataset trajectory index to original
+                         trajectory folder number. If None, assumes 1:1 mapping.
+        """
         self.joint_dim = joint_dim
         self.state_dim = 2 * joint_dim
         self.target_dim = target_dim
@@ -100,6 +112,15 @@ class TwoStreamDataset(Dataset):
 
         self.num_trajectories = self.trajectories.shape[0]
         self.num_steps = self.trajectories.shape[1]
+
+        # Trajectory index mapping: maps dataset row index -> original folder number
+        if traj_indices is not None:
+            self.traj_indices = traj_indices
+            print(f"Using trajectory mapping: {len(traj_indices)} trajectories")
+            print(f"First 5 original traj indices: {traj_indices[:5]}")
+        else:
+            # Default: assume 1:1 mapping (traj 0 -> folder 000, etc.)
+            self.traj_indices = np.arange(self.num_trajectories)
 
         self.transform = transforms.Compose([
             transforms.Resize(image_size),
@@ -123,13 +144,17 @@ class TwoStreamDataset(Dataset):
 
         action = self.trajectories[traj_no, step_no, -self.joint_dim:]
 
+        # Get the original trajectory folder number from the mapping
+        original_traj_no = self.traj_indices[traj_no]
+        print(f"{traj_no} and {original_traj_no}")
+
         # Load last num_history_images images (including current)
         images = []
         for i in range(self.num_history_images - 1, -1, -1):
             img_step = max(0, step_no - i)
             img_path = os.path.join(
                 self.img_dir,
-                f"traj_{traj_no:03d}/step_{img_step:03d}.jpg")
+                f"traj_{original_traj_no:03d}/step_{img_step:03d}.jpg")
             image = Image.open(img_path).convert('RGB')
             image = self.transform(image)
             images.append(image)
@@ -350,10 +375,18 @@ for model_complexity in ['high']: #'low', 'medium', 'high', 'xhigh']:
                                            use_two_stream)
         
         if use_two_stream:
+            # Load trajectory mapping from .npz file
+            mapping_file = os.path.join(ds_root_dir, f'traj_mapping_{config.ds_ratio}.npz')
+            mapping = np.load(mapping_file)
+            train_traj_indices = mapping['train_traj_indices']
+            print(f"Loaded trajectory mapping with {len(train_traj_indices)} trajectories")
+            print(f"First five indices are:", train_traj_indices[:5])
+
             dataset = TwoStreamDataset(ds_root_dir, ds_file_name,
                                        joints_num, target_dim,
                                        num_history_images=config.num_history_images,
-                                       image_size=config.image_size)
+                                       image_size=config.image_size,
+                                       traj_indices=train_traj_indices)
         else:
             dataset = TrajectoryDataset(ds_root_dir, ds_file_name,
                                         joints_num, target_dim, use_image)
