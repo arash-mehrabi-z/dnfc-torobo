@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from torkin import TorKin
 import torch
-from nn_models import GeneralModel, MLPBaseline
+from nn_models import GeneralModel, MLPBaseline, TwoStreamBaseline
 import torch.nn as nn
 import math
 import os
@@ -20,7 +20,7 @@ class Tester():
         self.onehot_size = self.config.onehot_dim
         
         self.cur_file_dir_path = os.path.dirname(__file__)
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.device = 'cpu'  # Force CPU to avoid CUDA library conflicts; change back to 'cuda' once resolved
 
         # self.load_model(train_no=0, epoch_no=0, 
         #                 use_custom_loss=self.config.use_custom_loss,
@@ -74,6 +74,37 @@ class Tester():
                                                  weights_only=True))
         print("***\nLoaded model weights from", dnfc_path)
         print("Loaded baseline weights from", base_path)
+        
+
+    def load_two_stream_model(self, train_no, epoch_no, model_complexity):
+        mlp_hidden, mlp_latent, cnn_latent, decoder_hidden = \
+            self.config.get_two_stream_dims(model_complexity)
+
+        target_dim = self.target_size + self.onehot_size
+        self.two_stream_model = TwoStreamBaseline(
+            target_dim=target_dim,
+            mlp_hidden=mlp_hidden,
+            mlp_latent=mlp_latent,
+            num_images=self.config.num_history_images,
+            cnn_latent=cnn_latent,
+            decoder_hidden=decoder_hidden,
+            action_dim=self.joint_size
+        )
+
+        m = self.two_stream_model.to(self.device)
+        model_name = self.config.get_model_name(False, False, False, use_two_stream=True)
+        num_params = self.config.get_params_num(m)
+        model_name += f"|{num_params}K_params"
+
+        model_adr = f'weights/{self.config.dataset_name}|{self.config.ds_ratio}|{model_name}' + \
+            f'/train_no_{train_no}/fbc_{epoch_no}.pth'
+
+        model_path = os.path.join(self.cur_file_dir_path, model_adr)
+        self.two_stream_model.load_state_dict(torch.load(
+            model_path,
+            map_location=torch.device(self.device),
+            weights_only=True))
+        print("***\nLoaded TwoStreamBaseline weights from", model_path)
 
 
     def get_delta_ang_offline(self,usebaseline,num):
