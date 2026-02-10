@@ -333,12 +333,12 @@ tester = Tester()
 kin = TorKin()
 
 use_only_dnfc = True
-epoch_no = 14000 #4000
-train_num = 3 #10
+epoch_no = 5000 #4000
+train_num = 2 #10
 
 for model_complexity in ['high']: #['low', 'medium', 'high', 'xhigh']: #['medium']:
     # enc_hid, cont_hid, lin_hid, lin_out = config.get_model_dims(model_complexity)
-    tester.load_model(0, 0, config.use_custom_loss, model_complexity)
+    tester.load_model(0, 5000, config.use_custom_loss, model_complexity)
     params_num = tester.config.get_params_num(tester.model)
     results_dir = create_results_dir(params_num)
 
@@ -351,7 +351,8 @@ for model_complexity in ['high']: #['low', 'medium', 'high', 'xhigh']: #['medium
             rospy.init_node('denz')
             print('waining for DNFC')
             comm.which('\n\n\n\ndnfc start on path'+str(eps_num)+'\n\n\n\n')
-            all_joints_dnfc, loss_dnfc, latent_reps, states_dnfc = online_test(tester, eps_num, False)
+            # all_joints_dnfc, loss_dnfc, latent_reps, states_dnfc = online_test(tester, eps_num, False)
+            all_joints_dnfc, loss_dnfc, latent_reps, states_dnfc = online_test(tester, eps_num, True)
 
             if use_only_dnfc:
                 all_joints_base, loss_basel, _, states_base = all_joints_dnfc, loss_dnfc, latent_reps, states_dnfc

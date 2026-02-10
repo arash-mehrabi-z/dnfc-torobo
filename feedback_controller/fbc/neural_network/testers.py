@@ -88,14 +88,14 @@ class Tester():
 
         dnfc_path = os.path.join(self.cur_file_dir_path, dnfc_adr)
         base_path = os.path.join(self.cur_file_dir_path, base_adr)
-        self.model.load_state_dict(torch.load(dnfc_path, 
-                                              map_location=torch.device(self.device),
-                                              weights_only=True))
-        # self.baseline.load_state_dict(torch.load(base_path, 
-        #                                          map_location=torch.device(self.device),
-        #                                          weights_only=True))
-        print("***\nLoaded model weights from", dnfc_path)
-        # print("Loaded baseline weights from", base_path)
+        # self.model.load_state_dict(torch.load(dnfc_path, 
+        #                                       map_location=torch.device(self.device),
+        #                                       weights_only=True))
+        self.baseline.load_state_dict(torch.load(base_path, 
+                                                 map_location=torch.device(self.device),
+                                                 weights_only=True))
+        # print("***\nLoaded model weights from", dnfc_path)
+        print("Loaded baseline weights from", base_path)
 
 
     def compute_ee_pose(self, joint_vals):
