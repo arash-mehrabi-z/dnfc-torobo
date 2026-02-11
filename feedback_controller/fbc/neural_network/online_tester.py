@@ -108,6 +108,8 @@ def online_test(tester:Tester, eps_num, use_baseline):
             latent_reps.append(x_des.tolist())
 
         velocities_tensor = torch.squeeze(velocities_tensor, 0)
+        # Scale back to original action range
+        velocities_tensor = velocities_tensor / config.action_scale
         state[:7] += (5*velocities_tensor)
 
         comm.create_and_pub_msg(state[:7])
@@ -334,7 +336,7 @@ kin = TorKin()
 
 use_only_dnfc = True
 epoch_no = 5000 #4000
-train_num = 2 #10
+train_num = 1 #2 #10
 
 for model_complexity in ['high']: #['low', 'medium', 'high', 'xhigh']: #['medium']:
     # enc_hid, cont_hid, lin_hid, lin_out = config.get_model_dims(model_complexity)
@@ -346,6 +348,8 @@ for model_complexity in ['high']: #['low', 'medium', 'high', 'xhigh']: #['medium
     all_states_base = []
     all_latent_reps = []
     for eps_num in range(len(tester.dataset)): #random_idx: #range(27, 110):
+        # if eps_num == 0:
+        #     continue
         for i_train in range(train_num):
             tester.load_model(i_train, epoch_no, config.use_custom_loss, model_complexity)
             rospy.init_node('denz')

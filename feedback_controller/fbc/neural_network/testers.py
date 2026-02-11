@@ -67,6 +67,8 @@ class Tester():
                                     state_dim=self.state_size,
                                     action_dim=self.joint_size,
                                     enc_hid=enc_hid, cont_hid=cont_hid,
+                                    encoded_space_dim=self.config.encoded_space_dim,
+                                    action_scale=self.config.action_scale,
                                     use_image=False)
         
         m = self.model.to(self.device)
@@ -461,7 +463,7 @@ class Tester():
         dist = np.linalg.norm(p1-p2)
         # print(p1, p2, dist)
         # if (self.criterion_mse(torch.tensor(p1), torch.tensor(p2))**0.5) <= 0.0001: 
-        if dist <= 0.015: #0.03 :#0.02:
+        if dist <= 0.02: #0.015: #0.03 :#0.02:
             return True
         return False
 

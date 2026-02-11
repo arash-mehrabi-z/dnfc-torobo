@@ -218,35 +218,47 @@ class GeneralModel(nn.Module):
 
 class MLPBaseline(nn.Module):
     """
-    Similar to GeneralModel but without encoding the state:
+    Similar to GeneralModel but with a frozen encoder for joint_state:
     - Stream 1: Encodes target_repr (goal representation) -> x_des
-    - Stream 2: Uses joint_state directly (no encoding) as x_curr
+    - Stream 2: Encodes joint_state with frozen encoder -> x_curr
     - Difference between x_des and x_curr → controller → action
     """
-    def __init__(self, target_dim, state_dim, action_dim, enc_hid, cont_hid, use_image=False):
+    def __init__(self, target_dim, state_dim, action_dim, enc_hid, cont_hid,
+                 encoded_space_dim, action_scale=50.0, use_image=False):
         super().__init__()
+        self.action_scale = action_scale
         if use_image:
-            self.target_enc = AlexNetPT(state_dim)  # Output matches state_dim
+            self.target_enc = AlexNetPT(encoded_space_dim)
         else:
-            # Target encoder: target_dim → enc_hid → state_dim
-            self.target_enc = MLP_3L(target_dim, enc_hid, enc_hid // 2, state_dim)
+            # Target encoder: target_dim → enc_hid → encoded_space_dim
+            # self.target_enc = MLP_3L(target_dim, enc_hid, enc_hid // 2, encoded_space_dim)
+            self.target_enc = MLP_2L(target_dim, enc_hid, encoded_space_dim)
 
-        # Controller/decoder: takes difference (state_dim) and outputs action
-        self.controller = MLP_3L(state_dim, cont_hid, cont_hid // 2, action_dim)
+        # Frozen state encoder: state_dim → enc_hid → encoded_space_dim
+        # self.state_enc = MLP_3L(state_dim, enc_hid, enc_hid // 2, encoded_space_dim)
+        self.state_enc = MLP_2L(state_dim, enc_hid, encoded_space_dim)
+        # Freeze the state encoder
+        # for param in self.state_enc.parameters():
+        #     param.requires_grad = False
+
+        # Controller/decoder: takes difference (encoded_space_dim) and outputs action
+        # self.controller = MLP_3L(encoded_space_dim, cont_hid, cont_hid // 2, action_dim)
+        self.controller = MLP_2L(encoded_space_dim, cont_hid, action_dim)
         self.controller.linear[-1].bias.data.fill_(0.0)
 
     def forward(self, target_repr, joint_state):
         # Encode target (desired state representation)
-        x_des = self.target_enc(target_repr)  # (batch_size, state_dim)
+        x_des = self.target_enc(target_repr)  # (batch_size, encoded_space_dim)
 
-        # Use joint state directly as current state representation
-        x_curr = joint_state  # (batch_size, state_dim)
+        # # Encode joint state with frozen encoder
+        x_curr = self.state_enc(joint_state)  # (batch_size, encoded_space_dim)
+        # x_curr = joint_state
 
         # Compute difference: where we want to be - where we are
         diff = x_des - x_curr
 
         # Decode to action
         acts_pred = self.controller(diff)
-        acts_pred = F.tanh(acts_pred)
+        acts_pred = F.tanh(acts_pred) * self.action_scale
 
         return acts_pred, x_des, x_curr, diff
