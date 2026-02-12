@@ -35,7 +35,7 @@ class TrajectoryDataset(Dataset):
         self.joint_dim = joint_dim
         self.state_dim = 2 * joint_dim
         self.target_dim = target_dim
-        self.pose_dim = 6  # 3 pos + 3 euler_norm per pose
+        self.pose_dim = 12  # 3 pos + 9 R matrix
         self.num_consecutive_poses = num_consecutive_poses
         self.ee_dim = self.pose_dim * num_consecutive_poses
         self.ds_root_dir = ds_root_dir
@@ -73,7 +73,7 @@ class TrajectoryDataset(Dataset):
         action_end_idx = action_start_idx + self.joint_dim
         action = self.trajectories[traj_no, step_no, action_start_idx:action_end_idx]
 
-        # End-effector pose: single pose (pos + euler_norm) stored at indices 35:41
+        # End-effector pose: single pose (pos + R matrix) stored at indices 35:
         # Stack N consecutive poses (current + N-1 previous) dynamically
         ee_start_idx = action_end_idx
         ee_end_idx = ee_start_idx + self.pose_dim
@@ -145,7 +145,8 @@ def run_test(n):
                                                                              batch_state)
             else:
                 batch_action_pred, batch_x_des, batch_x, batch_diff = model(batch_target_repr,
-                                                                             batch_ee_repr)
+                                                                             batch_ee_repr,
+                                                                             batch_state)
 
         if use_custom_loss:
             # loss_custom, loss_torques = criterion(batch_action_pred, batch_action,
@@ -285,12 +286,12 @@ num_consecutive_poses = config.num_consecutive_poses  # 1-10, typically 4
 use_baseline = False
 use_image = False
 use_custom_loss = config.use_custom_loss
-num_epochs = 10000 + 1
+num_epochs = 14000 + 1
 batch_size = 256
 learning_rate = 3e-4
 validation_interval = 100
 num_trains = 2
-noise_scale = 0.05 #* 4 # Fraction of std to use as noise
+noise_scale = config.noise_scale #* 4 # Fraction of std to use as noise
 action_scale = config.action_scale  # Scale actions to improve gradient flow
 
 if use_baseline:
@@ -338,6 +339,8 @@ for model_complexity in ['high']:#['low', 'medium', 'high', 'xhigh']:
         joint_state_std = torch.tensor(all_joint_state.std(axis=0)).to(device).float()
         print(f"joint_state std per dimension: {joint_state_std}")
 
+        # stop
+
         if use_baseline:
             model = MLPBaseline(target_dim=target_dim,
                                 state_dim=dataset.state_dim,
@@ -348,8 +351,11 @@ for model_complexity in ['high']:#['low', 'medium', 'high', 'xhigh']:
                                 use_image=use_image)
         else:
             model = GeneralModel(encoded_space_dim=encoded_space_dim, target_dim=target_dim,
-                                 ee_dim=dataset.ee_dim, action_dim=action_dim,
-                                 enc_hid=enc_hid, cont_hid=cont_hid, use_image=use_image)
+                                 ee_dim=dataset.ee_dim, state_dim=dataset.state_dim,
+                                 action_dim=action_dim,
+                                 enc_hid=enc_hid, cont_hid=cont_hid, 
+                                 action_scale=action_scale,
+                                 use_image=use_image)
         m = model.to(device)
         num_params = sum(p.numel() for p in m.parameters())/1e3
         model_name += f"|{num_params}K_params"
@@ -434,7 +440,9 @@ for model_complexity in ['high']:#['low', 'medium', 'high', 'xhigh']:
                 # batch_state_noisy = batch_state + batch_noise
 
                 # print(f"ee_repr_std: {ee_repr_std}")
-                # print(f"effective noise std: {ee_repr_std * noise_scale}")
+                # print(f"effective ee_repr noise std: {ee_repr_std * noise_scale}")
+                # print(f"joint_state_std: {joint_state_std}")
+                # print(f"effective joint_state noise std: {joint_state_std * noise_scale}")
 
 
                 optimizer.zero_grad()
@@ -443,7 +451,8 @@ for model_complexity in ['high']:#['low', 'medium', 'high', 'xhigh']:
                         batch_diff_noise = model(batch_target_repr, batch_state_noisy)
                 else:
                     batch_action_pred_noise, batch_x_des_noise, batch_x_noise, \
-                        batch_diff_noise = model(batch_target_repr, batch_ee_repr_noise)
+                        batch_diff_noise = model(batch_target_repr, batch_ee_repr_noise,
+                                                 batch_state_noisy)
 
                 # Scale actions for training (no noise adjustment since joint_state noise doesn't directly affect action)
                 batch_action_scaled = batch_action * action_scale

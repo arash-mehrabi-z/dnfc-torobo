@@ -16,7 +16,6 @@ import os
 import random
 import csv
 import pickle
-from scipy.spatial.transform import Rotation
 # from tslearn.metrics import dtw_path
 from dtw import *
 
@@ -49,8 +48,8 @@ def online_test(tester:Tester, eps_num, use_baseline):
                       step_size+state_size+target_size+onehot_size].tolist()
     goal_raw = elem[0][step_size+state_size :
                    step_size+state_size+target_size].tolist()
-    # Normalize target positions for model input
-    goal_norm = list(tester.normalize_target(goal_raw))
+    # # Normalize target positions for model input
+    # goal_norm = list(tester.normalize_target(goal_raw))
 
     # Use raw goal for computing waypoints (physical positions)
     obstA = torch.tensor(goal_raw[0:3])
@@ -86,7 +85,7 @@ def online_test(tester:Tester, eps_num, use_baseline):
     for i in range(traj_step_size):
         comm.which('\n dnfc in on step'+str(i)+'\n')
 
-        goal_tensor = torch.tensor(goal_norm+one_hot).to(device).float()
+        goal_tensor = torch.tensor(goal_raw+one_hot).to(device).float()
         goal_nn = torch.unsqueeze(goal_tensor, 0)
 
         # Get current joints and update history
@@ -106,7 +105,7 @@ def online_test(tester:Tester, eps_num, use_baseline):
             latent_reps.append(x_des.tolist())
         else:
             tester.model.eval()
-            velocities_tensor, x_des, x, _ = tester.model(goal_nn, ee_repr_nn)
+            velocities_tensor, x_des, x, _ = tester.model(goal_nn, ee_repr_nn, state_nn)
             x_des = torch.squeeze(x_des, 0)
             latent_reps.append(x_des.tolist())
 
@@ -338,7 +337,7 @@ tester = Tester()
 kin = TorKin()
 
 use_only_dnfc = True
-epoch_no = 4000 #4000
+epoch_no = 5000 #4000
 train_num = 1 #2 #10
 
 for model_complexity in ['high']: #['low', 'medium', 'high', 'xhigh']: #['medium']:
@@ -353,7 +352,7 @@ for model_complexity in ['high']: #['low', 'medium', 'high', 'xhigh']: #['medium
     for eps_num in range(len(tester.dataset)): #random_idx: #range(27, 110):
         # if eps_num == 0:
         #     continue
-        for i_train in range(1, 2): #train_num):
+        for i_train in range(train_num): #1, 2):
             tester.load_model(i_train, epoch_no, config.use_custom_loss, model_complexity)
             rospy.init_node('denz')
             print('waining for DNFC')

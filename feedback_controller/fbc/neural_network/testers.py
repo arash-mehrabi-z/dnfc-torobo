@@ -6,8 +6,6 @@ from nn_models import GeneralModel, MLPBaseline
 import torch.nn as nn
 import math
 import os
-import pickle
-from scipy.spatial.transform import Rotation
 from config import Config
 
 
@@ -21,23 +19,14 @@ class Tester():
         self.target_size = self.config.coords_dim
         self.onehot_size = self.config.onehot_dim
         self.num_consecutive_poses = self.config.num_consecutive_poses
-        self.pose_dim = 6  # 3 pos + 3 euler_norm per pose
+        self.pose_dim = 12  # 3 pos + 9 R matrix per pose
         self.ee_dim = self.pose_dim * self.num_consecutive_poses
 
         self.cur_file_dir_path = os.path.dirname(__file__)
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-        # Load normalization stats for ee_repr and target computation
-        eef_stats_path = os.path.join(self.cur_file_dir_path,
-            f'data/torobo/{self.config.dataset_name}/eef_norm_stats_{self.config.ds_ratio}.pkl')
-        with open(eef_stats_path, 'rb') as f:
-            eef_stats = pickle.load(f)
-        self.euler_mean = eef_stats['euler_mean']
-        self.euler_std = eef_stats['euler_std']
-        self.ee_pos_mean = eef_stats['ee_pos_mean']
-        self.ee_pos_std = eef_stats['ee_pos_std']
-        self.target_pos_mean = eef_stats['target_pos_mean']
-        self.target_pos_std = eef_stats['target_pos_std']
+        # Note: Using unnormalized ee_repr (pos + R matrix) as per new dataset format
+        # No normalization stats needed for ee_repr anymore
 
         # Fixed torso joint values
         self.qtorso = np.array([9.71605396e-06, 6.01925199e-05])
@@ -57,15 +46,16 @@ class Tester():
         self.criterion_mse = nn.MSELoss(reduction='sum')
 
     def load_model(self, train_no, epoch_no, use_custom_loss, model_complexity):
-
         enc_hid, cont_hid, lin_hid, lin_out = self.config.get_model_dims(model_complexity)
         self.model = GeneralModel(
             encoded_space_dim=self.config.encoded_space_dim,
             target_dim=self.target_size + self.onehot_size,
             ee_dim=self.ee_dim,
+            state_dim=self.state_size,
             action_dim=self.joint_size,
             enc_hid=enc_hid,
             cont_hid=cont_hid,
+            action_scale=self.config.action_scale,
             use_image=False)
         self.baseline = MLPBaseline(target_dim=self.target_size + self.onehot_size,
                                     state_dim=self.state_size,
@@ -105,19 +95,13 @@ class Tester():
 
 
     def compute_ee_pose(self, joint_vals):
-        """Compute normalized end-effector position and euler angles from joint values."""
+        """Compute end-effector position and rotation matrix from joint values.
+
+        Returns unnormalized pos (3,) and R matrix flattened (9,).
+        """
         q9 = np.concatenate((self.qtorso, np.array(joint_vals)), axis=0)
         p, R = self.kin.forwardkin(1, q9)
-        euler = Rotation.from_matrix(R).as_euler('xyz', degrees=False)
-        # Normalize both position and euler angles
-        pos_norm = (p - self.ee_pos_mean) / (self.ee_pos_std + 1e-8)
-        euler_norm = (euler - self.euler_mean) / (self.euler_std + 1e-8)
-        return pos_norm, euler_norm
-
-    def normalize_target(self, target_pos):
-        """Normalize target positions (9 values: 3 targets x 3 coords)."""
-        target_pos = np.array(target_pos)
-        return (target_pos - self.target_pos_mean) / (self.target_pos_std + 1e-8)
+        return p, R.flatten()
 
     def compute_ee_repr(self, joint_vals_history):
         """Compute ee_repr from N consecutive joint values.
@@ -126,12 +110,13 @@ class Tester():
             joint_vals_history: List of joint values, from current (index 0) to oldest.
                                Length should be num_consecutive_poses.
         Returns:
-            ee_repr: Concatenated poses, shape (6 * num_consecutive_poses,)
+            ee_repr: Concatenated poses, shape (12 * num_consecutive_poses,)
+                     Each pose is [pos(3), R_flattened(9)]
         """
         ee_poses = []
         for joint_vals in joint_vals_history:
-            p, euler_norm = self.compute_ee_pose(joint_vals)
-            ee_poses.append(np.concatenate([p, euler_norm]))
+            p, R_flat = self.compute_ee_pose(joint_vals)
+            ee_poses.append(np.concatenate([p, R_flat]))
         return np.concatenate(ee_poses)
 
 
@@ -155,11 +140,8 @@ class Tester():
             # Update history: insert current at front, remove oldest
             joint_history = [curr_joints] + joint_history[:-1]
 
-            goal_raw = elem[i][self.step_size+self.state_size:
+            goal = elem[i][self.step_size+self.state_size:
                           self.step_size+self.state_size+self.target_size+self.onehot_size].tolist()
-            # Normalize target positions (first 9 values), keep one-hot (last 4) unchanged
-            target_pos_norm = self.normalize_target(goal_raw[:self.target_size])
-            goal = list(target_pos_norm) + goal_raw[self.target_size:]
             goal_tensor = torch.tensor(goal).to(self.device).float()
             goal_nn = torch.unsqueeze(goal_tensor, 0)
 
@@ -174,7 +156,7 @@ class Tester():
                 velocities_tensor, _, _, _ = self.baseline(goal_nn, state_nn)
                 velocities_tensor = torch.squeeze(velocities_tensor, 0)
             else:
-                velocities_tensor, _, _, _ = self.model(goal_nn, ee_repr_nn)
+                velocities_tensor, _, _, _ = self.model(goal_nn, ee_repr_nn, state_nn)
                 velocities_tensor = torch.squeeze(velocities_tensor, 0)
 
             y1.append(float(velocities_tensor[0]))
@@ -196,20 +178,17 @@ class Tester():
                                      self.step_size+self.state_size].tolist()
                                      ).to(self.device)
 
-        goal_raw = elem[0][self.step_size + self.state_size :
+        goal = elem[0][self.step_size + self.state_size :
                        self.step_size + self.state_size + self.target_size].tolist()
         one_hot = elem[0][self.step_size + self.state_size + self.target_size :
                           self.step_size + self.state_size + self.target_size + self.onehot_size
                           ].tolist()
-        # Normalize target positions for model input
-        goal_norm = list(self.normalize_target(goal_raw))
 
         milestones = self.get_changes_indexes(num)
 
-        # Use raw goal for computing waypoints (physical positions)
-        obstA = torch.tensor(goal_raw[0:3])
-        obstB = torch.tensor(goal_raw[3:6])
-        obstC = torch.tensor(goal_raw[6:9])
+        obstA = torch.tensor(goal[0:3])
+        obstB = torch.tensor(goal[3:6])
+        obstC = torch.tensor(goal[6:9])
         grepB = [obstB[0], obstB[1], 0.87]
         putB = [obstA[0], obstA[1], 0.9]
         grepC = [obstC[0], obstC[1], 0.87]
@@ -225,11 +204,11 @@ class Tester():
         if out:
             print(milestone_js)
             print('this is A')
-            print(goal_raw[:3])
+            print(goal[:3])
             print('this is B')
-            print(goal_raw[3:6])
+            print(goal[3:6])
             print('this is C')
-            print(goal_raw[6:])
+            print(goal[6:])
 
         if use_baseline:
             self.baseline.eval()
@@ -241,7 +220,7 @@ class Tester():
         joint_history = [init_joints] * self.num_consecutive_poses
 
         for i in range(self.dataset.shape[1]):
-            goal_tensor = torch.tensor(goal_norm + one_hot).to(self.device).float()
+            goal_tensor = torch.tensor(goal + one_hot).to(self.device).float()
             goal_nn = torch.unsqueeze(goal_tensor, 0)
 
             # Get current joints and update history
@@ -257,7 +236,7 @@ class Tester():
             if use_baseline:
                 velocities_tensor, x_des, x, _ = self.baseline(goal_nn, state_nn)
             else:
-                velocities_tensor, x_des, x, _ = self.model(goal_nn, ee_repr_nn)
+                velocities_tensor, x_des, x, _ = self.model(goal_nn, ee_repr_nn, state_nn)
 
             velocities_tensor = torch.squeeze(velocities_tensor, 0)
             print_it_out = out
@@ -320,18 +299,16 @@ class Tester():
         print(num)
         state = torch.tensor(elem[0][1:1+self.state_size].tolist()).to(self.device)
 
-        goal_raw = elem[0][self.step_size+self.state_size:
+        goal = elem[0][self.step_size+self.state_size:
                        self.step_size+self.state_size+self.target_size].tolist()
         one_hot = elem[0][self.step_size+self.state_size+self.target_size:
                          self.step_size+self.state_size+self.target_size+self.onehot_size].tolist()
-        # Normalize target positions for model input
-        goal_norm = list(self.normalize_target(goal_raw))
         milestones = self.get_changes_indexes(num)
         path_point = 0
         points = []
-        points.append(goal_raw[:3])
-        points.append(goal_raw[3:6])
-        points.append(goal_raw[6:9])
+        points.append(goal[:3])
+        points.append(goal[3:6])
+        points.append(goal[6:9])
 
         milestone_js = [
             torch.tensor(elem[milestones[0]-1][1:8].tolist()),
@@ -339,7 +316,7 @@ class Tester():
             torch.tensor(elem[milestones[2]-1][1:8].tolist()),
             torch.tensor(elem[milestones[3]-1][1:8].tolist())
         ]
-        print(goal_raw)
+        print(goal)
         if usebaseline:
             self.baseline.eval()
         else:
@@ -350,7 +327,7 @@ class Tester():
         joint_history = [init_joints] * self.num_consecutive_poses
 
         for i in range(299):
-            goal_tensor = torch.tensor(goal_norm + one_hot).to(self.device).float()
+            goal_tensor = torch.tensor(goal + one_hot).to(self.device).float()
             goal_nn = torch.unsqueeze(goal_tensor, 0)
 
             # Get current joints and update history
@@ -366,7 +343,7 @@ class Tester():
             if usebaseline:
                 velocities_tensor, x_des, x, _ = self.baseline(goal_nn, state_nn)
             else:
-                velocities_tensor, x_des, x, _ = self.model(goal_nn, ee_repr_nn)
+                velocities_tensor, x_des, x, _ = self.model(goal_nn, ee_repr_nn, state_nn)
 
             velocities_tensor = torch.squeeze(velocities_tensor, 0)
 

@@ -180,10 +180,10 @@ class GeneralModel(nn.Module):
     """
     Two-stream encoder model:
     - Stream 1: Encodes target_repr (goal representation)
-    - Stream 2: Encodes ee_repr (N consecutive end-effector poses)
+    - Stream 2: Encodes ee_repr + joint_state (N consecutive end-effector poses + joint positions/velocities)
     - Difference between encoded streams → controller → action
     """
-    def __init__(self, encoded_space_dim, target_dim, ee_dim, action_dim,
+    def __init__(self, encoded_space_dim, target_dim, ee_dim, state_dim, action_dim,
                  enc_hid, cont_hid, action_scale=50.0, use_image=False):
         super().__init__()
         self.action_scale = action_scale
@@ -193,19 +193,20 @@ class GeneralModel(nn.Module):
             # Target encoder: target_dim (13) → enc_hid → encoded_space_dim
             self.target_enc = MLP_3L(target_dim, enc_hid, enc_hid // 2, encoded_space_dim)
 
-        # EE pose encoder: ee_dim (6*N, e.g., 24 for N=4) → enc_hid → encoded_space_dim
-        self.ee_enc = MLP_3L(ee_dim, enc_hid, enc_hid // 2, encoded_space_dim)
+        # EE + state encoder: (ee_dim + state_dim) → enc_hid → encoded_space_dim
+        self.ee_enc = MLP_3L(ee_dim + state_dim, enc_hid, enc_hid // 2, encoded_space_dim)
 
         # Controller/decoder: takes difference and outputs action
         self.controller = MLP_3L(encoded_space_dim, cont_hid, cont_hid // 2, action_dim)
         self.controller.linear[-1].bias.data.fill_(0.0)
 
-    def forward(self, target_repr, ee_repr):
+    def forward(self, target_repr, ee_repr, joint_state):
         # Encode target (desired state representation)
         x_des = self.target_enc(target_repr)  # (batch_size, encoded_space_dim)
 
-        # Encode current EE pose history
-        x_curr = self.ee_enc(ee_repr)  # (batch_size, encoded_space_dim)
+        # Concatenate EE pose history with joint state and encode
+        ee_state_combined = torch.cat([ee_repr, joint_state], dim=1)
+        x_curr = self.ee_enc(ee_state_combined)  # (batch_size, encoded_space_dim)
 
         # Compute difference: where we want to be - where we are
         diff = x_des - x_curr
