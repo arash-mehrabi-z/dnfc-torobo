@@ -184,8 +184,9 @@ class GeneralModel(nn.Module):
     - Difference between encoded streams → controller → action
     """
     def __init__(self, encoded_space_dim, target_dim, ee_dim, action_dim,
-                 enc_hid, cont_hid, use_image):
+                 enc_hid, cont_hid, action_scale=50.0, use_image=False):
         super().__init__()
+        self.action_scale = action_scale
         if use_image:
             self.target_enc = AlexNetPT(encoded_space_dim)
         else:
@@ -211,7 +212,7 @@ class GeneralModel(nn.Module):
 
         # Decode to action
         acts_pred = self.controller(diff)
-        acts_pred = F.tanh(acts_pred)
+        acts_pred = F.tanh(acts_pred) * self.action_scale
 
         return acts_pred, x_des, x_curr, diff
     
@@ -231,19 +232,20 @@ class MLPBaseline(nn.Module):
             self.target_enc = AlexNetPT(encoded_space_dim)
         else:
             # Target encoder: target_dim → enc_hid → encoded_space_dim
-            # self.target_enc = MLP_3L(target_dim, enc_hid, enc_hid // 2, encoded_space_dim)
-            self.target_enc = MLP_2L(target_dim, enc_hid, encoded_space_dim)
+            self.target_enc = MLP_3L(target_dim, enc_hid, enc_hid // 2, encoded_space_dim)
+            # self.target_enc = MLP_2L(target_dim, enc_hid, encoded_space_dim)
 
         # Frozen state encoder: state_dim → enc_hid → encoded_space_dim
-        # self.state_enc = MLP_3L(state_dim, enc_hid, enc_hid // 2, encoded_space_dim)
-        self.state_enc = MLP_2L(state_dim, enc_hid, encoded_space_dim)
+        self.state_enc = MLP_3L(state_dim, enc_hid, enc_hid // 2, encoded_space_dim)
+
+        # self.state_enc = MLP_2L(state_dim, enc_hid, encoded_space_dim)
         # Freeze the state encoder
         # for param in self.state_enc.parameters():
         #     param.requires_grad = False
 
         # Controller/decoder: takes difference (encoded_space_dim) and outputs action
-        # self.controller = MLP_3L(encoded_space_dim, cont_hid, cont_hid // 2, action_dim)
-        self.controller = MLP_2L(encoded_space_dim, cont_hid, action_dim)
+        self.controller = MLP_3L(encoded_space_dim, cont_hid, cont_hid // 2, action_dim)
+        # self.controller = MLP_2L(encoded_space_dim, cont_hid, action_dim)
         self.controller.linear[-1].bias.data.fill_(0.0)
 
     def forward(self, target_repr, joint_state):

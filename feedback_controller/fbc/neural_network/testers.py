@@ -27,13 +27,17 @@ class Tester():
         self.cur_file_dir_path = os.path.dirname(__file__)
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-        # Load euler normalization stats for ee_repr computation
-        euler_stats_path = os.path.join(self.cur_file_dir_path,
-            f'data/torobo/{self.config.dataset_name}/euler_norm_stats_{self.config.ds_ratio}.pkl')
-        with open(euler_stats_path, 'rb') as f:
-            euler_stats = pickle.load(f)
-        self.euler_mean = euler_stats['euler_mean']
-        self.euler_std = euler_stats['euler_std']
+        # Load normalization stats for ee_repr and target computation
+        eef_stats_path = os.path.join(self.cur_file_dir_path,
+            f'data/torobo/{self.config.dataset_name}/eef_norm_stats_{self.config.ds_ratio}.pkl')
+        with open(eef_stats_path, 'rb') as f:
+            eef_stats = pickle.load(f)
+        self.euler_mean = eef_stats['euler_mean']
+        self.euler_std = eef_stats['euler_std']
+        self.ee_pos_mean = eef_stats['ee_pos_mean']
+        self.ee_pos_std = eef_stats['ee_pos_std']
+        self.target_pos_mean = eef_stats['target_pos_mean']
+        self.target_pos_std = eef_stats['target_pos_std']
 
         # Fixed torso joint values
         self.qtorso = np.array([9.71605396e-06, 6.01925199e-05])
@@ -90,24 +94,30 @@ class Tester():
 
         dnfc_path = os.path.join(self.cur_file_dir_path, dnfc_adr)
         base_path = os.path.join(self.cur_file_dir_path, base_adr)
-        # self.model.load_state_dict(torch.load(dnfc_path, 
-        #                                       map_location=torch.device(self.device),
-        #                                       weights_only=True))
-        self.baseline.load_state_dict(torch.load(base_path, 
-                                                 map_location=torch.device(self.device),
-                                                 weights_only=True))
-        # print("***\nLoaded model weights from", dnfc_path)
-        print("Loaded baseline weights from", base_path)
+        self.model.load_state_dict(torch.load(dnfc_path, 
+                                              map_location=torch.device(self.device),
+                                              weights_only=True))
+        # self.baseline.load_state_dict(torch.load(base_path, 
+        #                                          map_location=torch.device(self.device),
+        #                                          weights_only=True))
+        print("***\nLoaded model weights from", dnfc_path)
+        # print("Loaded baseline weights from", base_path)
 
 
     def compute_ee_pose(self, joint_vals):
-        """Compute end-effector position and normalized euler angles from joint values."""
+        """Compute normalized end-effector position and euler angles from joint values."""
         q9 = np.concatenate((self.qtorso, np.array(joint_vals)), axis=0)
         p, R = self.kin.forwardkin(1, q9)
         euler = Rotation.from_matrix(R).as_euler('xyz', degrees=False)
+        # Normalize both position and euler angles
+        pos_norm = (p - self.ee_pos_mean) / (self.ee_pos_std + 1e-8)
         euler_norm = (euler - self.euler_mean) / (self.euler_std + 1e-8)
-        return p, euler_norm
-    
+        return pos_norm, euler_norm
+
+    def normalize_target(self, target_pos):
+        """Normalize target positions (9 values: 3 targets x 3 coords)."""
+        target_pos = np.array(target_pos)
+        return (target_pos - self.target_pos_mean) / (self.target_pos_std + 1e-8)
 
     def compute_ee_repr(self, joint_vals_history):
         """Compute ee_repr from N consecutive joint values.
@@ -145,8 +155,11 @@ class Tester():
             # Update history: insert current at front, remove oldest
             joint_history = [curr_joints] + joint_history[:-1]
 
-            goal = elem[i][self.step_size+self.state_size:
+            goal_raw = elem[i][self.step_size+self.state_size:
                           self.step_size+self.state_size+self.target_size+self.onehot_size].tolist()
+            # Normalize target positions (first 9 values), keep one-hot (last 4) unchanged
+            target_pos_norm = self.normalize_target(goal_raw[:self.target_size])
+            goal = list(target_pos_norm) + goal_raw[self.target_size:]
             goal_tensor = torch.tensor(goal).to(self.device).float()
             goal_nn = torch.unsqueeze(goal_tensor, 0)
 
@@ -183,17 +196,20 @@ class Tester():
                                      self.step_size+self.state_size].tolist()
                                      ).to(self.device)
 
-        goal = elem[0][self.step_size + self.state_size : 
+        goal_raw = elem[0][self.step_size + self.state_size :
                        self.step_size + self.state_size + self.target_size].tolist()
         one_hot = elem[0][self.step_size + self.state_size + self.target_size :
                           self.step_size + self.state_size + self.target_size + self.onehot_size
                           ].tolist()
-        
+        # Normalize target positions for model input
+        goal_norm = list(self.normalize_target(goal_raw))
+
         milestones = self.get_changes_indexes(num)
 
-        obstA = torch.tensor(goal[0:3])
-        obstB = torch.tensor(goal[3:6])
-        obstC = torch.tensor(goal[6:9])
+        # Use raw goal for computing waypoints (physical positions)
+        obstA = torch.tensor(goal_raw[0:3])
+        obstB = torch.tensor(goal_raw[3:6])
+        obstC = torch.tensor(goal_raw[6:9])
         grepB = [obstB[0], obstB[1], 0.87]
         putB = [obstA[0], obstA[1], 0.9]
         grepC = [obstC[0], obstC[1], 0.87]
@@ -209,11 +225,11 @@ class Tester():
         if out:
             print(milestone_js)
             print('this is A')
-            print(goal[:3])
+            print(goal_raw[:3])
             print('this is B')
-            print(goal[3:6])
+            print(goal_raw[3:6])
             print('this is C')
-            print(goal[6:])
+            print(goal_raw[6:])
 
         if use_baseline:
             self.baseline.eval()
@@ -225,7 +241,7 @@ class Tester():
         joint_history = [init_joints] * self.num_consecutive_poses
 
         for i in range(self.dataset.shape[1]):
-            goal_tensor = torch.tensor(goal + one_hot).to(self.device)
+            goal_tensor = torch.tensor(goal_norm + one_hot).to(self.device).float()
             goal_nn = torch.unsqueeze(goal_tensor, 0)
 
             # Get current joints and update history
@@ -304,16 +320,18 @@ class Tester():
         print(num)
         state = torch.tensor(elem[0][1:1+self.state_size].tolist()).to(self.device)
 
-        goal = elem[0][self.step_size+self.state_size:
+        goal_raw = elem[0][self.step_size+self.state_size:
                        self.step_size+self.state_size+self.target_size].tolist()
         one_hot = elem[0][self.step_size+self.state_size+self.target_size:
                          self.step_size+self.state_size+self.target_size+self.onehot_size].tolist()
+        # Normalize target positions for model input
+        goal_norm = list(self.normalize_target(goal_raw))
         milestones = self.get_changes_indexes(num)
         path_point = 0
         points = []
-        points.append(goal[:3])
-        points.append(goal[3:6])
-        points.append(goal[6:9])
+        points.append(goal_raw[:3])
+        points.append(goal_raw[3:6])
+        points.append(goal_raw[6:9])
 
         milestone_js = [
             torch.tensor(elem[milestones[0]-1][1:8].tolist()),
@@ -321,7 +339,7 @@ class Tester():
             torch.tensor(elem[milestones[2]-1][1:8].tolist()),
             torch.tensor(elem[milestones[3]-1][1:8].tolist())
         ]
-        print(goal)
+        print(goal_raw)
         if usebaseline:
             self.baseline.eval()
         else:
@@ -332,7 +350,7 @@ class Tester():
         joint_history = [init_joints] * self.num_consecutive_poses
 
         for i in range(299):
-            goal_tensor = torch.tensor(goal + one_hot).to(self.device).float()
+            goal_tensor = torch.tensor(goal_norm + one_hot).to(self.device).float()
             goal_nn = torch.unsqueeze(goal_tensor, 0)
 
             # Get current joints and update history

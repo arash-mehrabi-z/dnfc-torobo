@@ -282,7 +282,7 @@ action_dim = joints_num
 num_consecutive_poses = config.num_consecutive_poses  # 1-10, typically 4
 
 # Training:
-use_baseline = True
+use_baseline = False
 use_image = False
 use_custom_loss = config.use_custom_loss
 num_epochs = 10000 + 1
@@ -423,14 +423,19 @@ for model_complexity in ['high']:#['low', 'medium', 'high', 'xhigh']:
                 batch_noise = batch_noise * ee_repr_std * noise_scale
                 batch_ee_repr_noise = batch_ee_repr + batch_noise
 
-                # # Noise for joint_state (used by baseline)
-                # batch_state_noise_raw = torch.randn(batch_state.size()).to(device).float()
-                # batch_state_noise = batch_state_noise_raw * joint_state_std * noise_scale
-                # batch_state_noisy = batch_state + batch_state_noise
-                batch_noise = torch.normal(mean=0.0, std=0.004, #std=0.001
-                                        size=(batch_state.size()[0], encoded_space_dim)
-                                        ).to(device).float()
-                batch_state_noisy = batch_state + batch_noise
+                # Noise for joint_state (used by baseline)
+                batch_state_noise_raw = torch.randn(batch_state.size()).to(device).float()
+                batch_state_noise = batch_state_noise_raw * joint_state_std * noise_scale
+                batch_state_noisy = batch_state + batch_state_noise
+
+                # batch_noise = torch.normal(mean=0.0, std=0.004, #std=0.001
+                #                         size=(batch_state.size()[0], encoded_space_dim)
+                #                         ).to(device).float()
+                # batch_state_noisy = batch_state + batch_noise
+
+                # print(f"ee_repr_std: {ee_repr_std}")
+                # print(f"effective noise std: {ee_repr_std * noise_scale}")
+
 
                 optimizer.zero_grad()
                 if use_baseline:

@@ -45,14 +45,17 @@ def online_test(tester:Tester, eps_num, use_baseline):
                                  ).to(device)
     
     # milestones = tester.get_changes_indexes(eps_num)
-    one_hot = elem[0][step_size+state_size+target_size : 
+    one_hot = elem[0][step_size+state_size+target_size :
                       step_size+state_size+target_size+onehot_size].tolist()
-    goal = elem[0][step_size+state_size : 
+    goal_raw = elem[0][step_size+state_size :
                    step_size+state_size+target_size].tolist()
-    
-    obstA = torch.tensor(goal[0:3])
-    obstB = torch.tensor(goal[3:6])
-    obstC = torch.tensor(goal[6:9])
+    # Normalize target positions for model input
+    goal_norm = list(tester.normalize_target(goal_raw))
+
+    # Use raw goal for computing waypoints (physical positions)
+    obstA = torch.tensor(goal_raw[0:3])
+    obstB = torch.tensor(goal_raw[3:6])
+    obstC = torch.tensor(goal_raw[6:9])
     grepB = [obstB[0], obstB[1], 0.87]
     putB = [obstA[0], obstA[1], 0.9]
     grepC = [obstC[0], obstC[1], 0.87]
@@ -83,7 +86,7 @@ def online_test(tester:Tester, eps_num, use_baseline):
     for i in range(traj_step_size):
         comm.which('\n dnfc in on step'+str(i)+'\n')
 
-        goal_tensor = torch.tensor(goal+one_hot).to(device)
+        goal_tensor = torch.tensor(goal_norm+one_hot).to(device).float()
         goal_nn = torch.unsqueeze(goal_tensor, 0)
 
         # Get current joints and update history
@@ -335,7 +338,7 @@ tester = Tester()
 kin = TorKin()
 
 use_only_dnfc = True
-epoch_no = 5000 #4000
+epoch_no = 4000 #4000
 train_num = 1 #2 #10
 
 for model_complexity in ['high']: #['low', 'medium', 'high', 'xhigh']: #['medium']:
@@ -350,13 +353,13 @@ for model_complexity in ['high']: #['low', 'medium', 'high', 'xhigh']: #['medium
     for eps_num in range(len(tester.dataset)): #random_idx: #range(27, 110):
         # if eps_num == 0:
         #     continue
-        for i_train in range(train_num):
+        for i_train in range(1, 2): #train_num):
             tester.load_model(i_train, epoch_no, config.use_custom_loss, model_complexity)
             rospy.init_node('denz')
             print('waining for DNFC')
             comm.which('\n\n\n\ndnfc start on path'+str(eps_num)+'\n\n\n\n')
-            # all_joints_dnfc, loss_dnfc, latent_reps, states_dnfc = online_test(tester, eps_num, False)
-            all_joints_dnfc, loss_dnfc, latent_reps, states_dnfc = online_test(tester, eps_num, True)
+            all_joints_dnfc, loss_dnfc, latent_reps, states_dnfc = online_test(tester, eps_num, False)
+            # all_joints_dnfc, loss_dnfc, latent_reps, states_dnfc = online_test(tester, eps_num, True)
 
             if use_only_dnfc:
                 all_joints_base, loss_basel, _, states_base = all_joints_dnfc, loss_dnfc, latent_reps, states_dnfc
