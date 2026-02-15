@@ -190,7 +190,7 @@ def create_csv_files(weights_storage_root_dir):
 
 
 # Main training loop
-for model_complexity in ['low', 'medium', 'high', 'xhigh']:  # ['minimal', 'low', 'medium', 'high', 'xhigh']
+for model_complexity in ['low', 'medium', 'high', 'xhigh']: #['minimal']:
     n_layer, n_head, n_emb, p_drop_attn, n_cond_layers, ff_mult = config.get_transformer_diffusion_dims(model_complexity)
 
     for i_train in range(num_trains):

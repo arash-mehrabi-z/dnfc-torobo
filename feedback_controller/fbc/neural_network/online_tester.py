@@ -145,7 +145,7 @@ def online_test_diffusion_transformer(tester:Tester, eps_num):
     step_size = tester.step_size
     target_size = tester.target_size
     onehot_size = tester.onehot_size
-    traj_step_size = 900 // 2
+    traj_step_size = 525 #900 // 2
 
     elem = tester.dataset[eps_num]
     state = torch.tensor(
@@ -605,7 +605,7 @@ kin = TorKin()
 epoch_no = 5000 #15000
 train_num = 10 #10
 
-for model_complexity in ['medium', 'low']: #['low', 'medium', 'high', 'xhigh']:
+for model_complexity in ['minimal']: #['xhigh', 'medium', 'low', 'minimal']:
     # tester.load_diffusion_model(0, epoch_no, model_complexity)
     tester.load_diffusion_transformer_model(0, epoch_no, model_complexity)
     params_num = tester.config.get_params_num(tester.diffusion_transformer_model)
