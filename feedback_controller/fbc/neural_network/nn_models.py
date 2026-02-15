@@ -192,8 +192,9 @@ class GeneralModel(nn.Module):
             # Target encoder: target_dim (13) → enc_hid → encoded_space_dim
             self.target_enc = MLP_2L(target_dim, enc_hid, encoded_space_dim)
 
-        # EE + joint6 encoder: ee_repr + joint #6 pos + joint #6 vel = ee_dim + 2
-        self.ee_enc = MLP_2L(ee_dim + 2, enc_hid, encoded_space_dim)
+        # EE position-only encoder: uses only first 3 dims of each pose (position)
+        self.ee_pos_dim = 3 * (ee_dim // 12)  # 3 pos dims per pose × num_consecutive_poses
+        self.ee_enc = MLP_2L(self.ee_pos_dim, enc_hid, encoded_space_dim)
 
         # Controller/decoder: takes difference and outputs action
         self.controller = MLP_2L(encoded_space_dim, cont_hid, action_dim)
@@ -203,12 +204,14 @@ class GeneralModel(nn.Module):
         # Encode target (desired state representation)
         x_des = self.target_enc(target_repr)  # (batch_size, encoded_space_dim)
 
-        # Extract joint #6 position (index 5) and velocity (index 12)
-        joint6_state = torch.cat([joint_state[:, 5:6], joint_state[:, 12:13]], dim=1)
+        # Extract only position (first 3 dims) from each consecutive pose
+        # ee_repr layout: [pos(3) rot(9)] * num_consecutive_poses
+        pose_dim = 12
+        num_poses = ee_repr.shape[1] // pose_dim
+        ee_pos_parts = [ee_repr[:, k * pose_dim : k * pose_dim + 3] for k in range(num_poses)]
+        ee_pos = torch.cat(ee_pos_parts, dim=1)  # (batch_size, 3 * num_poses)
 
-        # Concatenate EE pose history with joint #6 state and encode
-        ee_state_combined = torch.cat([ee_repr, joint6_state], dim=1)
-        x_curr = self.ee_enc(ee_state_combined)  # (batch_size, encoded_space_dim)
+        x_curr = self.ee_enc(ee_pos)  # (batch_size, encoded_space_dim)
 
         # Compute difference: where we want to be - where we are
         diff = x_des - x_curr
