@@ -8,7 +8,7 @@ class Config:
         self.noise_scale = 0.10 #0.01 #0.10 #0.05
 
         self.v_name = f"robo_enc_eef_N={self.num_consecutive_poses}_plus_joints_noise={self.noise_scale}_only6" #"6l_linear" #"v_custl_mse"
-        self.v_name_base = "joint_state_active_enc_scale_action" #"joint_state_frozen_enc" #"4l_base" 
+        self.v_name_base = f"CONC_robo_enc_eef_N={self.num_consecutive_poses}_plus_joints_noise={self.noise_scale}_only6" #"joint_state_frozen_enc" #"4l_base" 
 
         self.episodes_num_ds = 72 #500 #360 #2000
         self.dataset_name = f"trajs:{self.episodes_num_ds}_blocks:3" +\
@@ -75,8 +75,8 @@ class Config:
         elif model_complexity == 'high':
             enc_hid = 128 * 2
             cont_hid = 384 * 2
-            lin_hid = 2*27-3
-            lin_out = 192 * 2
+            lin_hid = 128 * 2 #2*27-3
+            lin_out = 470 #192 * 2
         elif model_complexity == 'xhigh':
             enc_hid = 128 * 4
             cont_hid = 384 * 4

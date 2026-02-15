@@ -139,6 +139,7 @@ def run_test(n):
         with torch.no_grad():
             if use_baseline:
                 batch_action_pred, batch_x_des, batch_x, batch_diff = model(batch_target_repr,
+                                                                             batch_ee_repr,
                                                                              batch_state)
             else:
                 batch_action_pred, batch_x_des, batch_x, batch_diff = model(batch_target_repr,
@@ -275,10 +276,10 @@ action_dim = joints_num
 num_consecutive_poses = config.num_consecutive_poses  # 1-10, typically 4
 
 # Training:
-use_baseline = False
+use_baseline = True
 use_image = False
 use_custom_loss = config.use_custom_loss
-num_epochs = 7000 + 1
+num_epochs = 10000 + 1
 batch_size = 256
 learning_rate = 3e-4
 validation_interval = 100
@@ -333,11 +334,12 @@ for model_complexity in ['high']:#['low', 'medium', 'high', 'xhigh']:
         # stop
 
         if use_baseline:
-            model = MLPBaseline(target_dim=target_dim,
+            model = MLPBaseline(encoded_space_dim=encoded_space_dim,
+                                target_dim=target_dim,
+                                ee_dim=dataset.ee_dim,
                                 state_dim=dataset.state_dim,
                                 action_dim=action_dim,
-                                enc_hid=enc_hid, cont_hid=cont_hid,
-                                encoded_space_dim=encoded_space_dim,
+                                enc_hid=lin_hid, cont_hid=lin_out,
                                 use_image=use_image)
         else:
             model = GeneralModel(encoded_space_dim=encoded_space_dim, target_dim=target_dim,
@@ -437,7 +439,8 @@ for model_complexity in ['high']:#['low', 'medium', 'high', 'xhigh']:
                 optimizer.zero_grad()
                 if use_baseline:
                     batch_action_pred_noise, batch_x_des_noise, batch_x_noise, \
-                        batch_diff_noise = model(batch_target_repr, batch_state_noisy)
+                        batch_diff_noise = model(batch_target_repr, batch_ee_repr_noise,
+                                                 batch_state_noisy)
                 else:
                     batch_action_pred_noise, batch_x_des_noise, batch_x_noise, \
                         batch_diff_noise = model(batch_target_repr, batch_ee_repr_noise,

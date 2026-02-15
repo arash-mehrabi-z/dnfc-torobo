@@ -222,13 +222,13 @@ class GeneralModel(nn.Module):
 
 class MLPBaseline(nn.Module):
     """
-    Similar to GeneralModel but with a frozen encoder for joint_state:
+    Similar to GeneralModel but uses concatenation instead of subtraction:
     - Stream 1: Encodes target_repr (goal representation) -> x_des
-    - Stream 2: Encodes joint_state with frozen encoder -> x_curr
-    - Difference between x_des and x_curr → controller → action
+    - Stream 2: Encodes ee_repr + joint #6 position & velocity -> x_curr
+    - Concatenation of x_des and x_curr → controller → action
     """
-    def __init__(self, target_dim, state_dim, action_dim, enc_hid, cont_hid,
-                 encoded_space_dim, use_image=False):
+    def __init__(self, encoded_space_dim, target_dim, ee_dim, state_dim, action_dim,
+                 enc_hid, cont_hid, use_image=False):
         super().__init__()
         if use_image:
             self.target_enc = AlexNetPT(encoded_space_dim)
@@ -236,26 +236,29 @@ class MLPBaseline(nn.Module):
             # Target encoder: target_dim → enc_hid → encoded_space_dim
             self.target_enc = MLP_2L(target_dim, enc_hid, encoded_space_dim)
 
-        # State encoder: state_dim → enc_hid → encoded_space_dim
-        self.state_enc = MLP_2L(state_dim, enc_hid, encoded_space_dim)
+        # EE + joint6 encoder: ee_repr + joint #6 pos + joint #6 vel = ee_dim + 2
+        self.ee_enc = MLP_2L(ee_dim + 2, enc_hid, encoded_space_dim)
 
-        # Controller/decoder: takes difference (encoded_space_dim) and outputs action
-        self.controller = MLP_2L(encoded_space_dim, cont_hid, action_dim)
+        # Controller/decoder: takes concatenation (2 * encoded_space_dim) and outputs action
+        self.controller = MLP_2L(2 * encoded_space_dim, cont_hid, action_dim)
         self.controller.linear[-1].bias.data.fill_(0.0)
 
-    def forward(self, target_repr, joint_state):
+    def forward(self, target_repr, ee_repr, joint_state):
         # Encode target (desired state representation)
         x_des = self.target_enc(target_repr)  # (batch_size, encoded_space_dim)
 
-        # # Encode joint state with frozen encoder
-        x_curr = self.state_enc(joint_state)  # (batch_size, encoded_space_dim)
-        # x_curr = joint_state
+        # Extract joint #6 position (index 5) and velocity (index 12)
+        joint6_state = torch.cat([joint_state[:, 5:6], joint_state[:, 12:13]], dim=1)
 
-        # Compute difference: where we want to be - where we are
-        diff = x_des - x_curr
+        # Concatenate EE pose history with joint #6 state and encode
+        ee_state_combined = torch.cat([ee_repr, joint6_state], dim=1)
+        x_curr = self.ee_enc(ee_state_combined)  # (batch_size, encoded_space_dim)
+
+        # Concatenate latent vectors
+        concat = torch.cat([x_des, x_curr], dim=1)
 
         # Decode to action
-        acts_pred = self.controller(diff)
+        acts_pred = self.controller(concat)
         acts_pred = F.tanh(acts_pred)
 
-        return acts_pred, x_des, x_curr, diff
+        return acts_pred, x_des, x_curr, concat
