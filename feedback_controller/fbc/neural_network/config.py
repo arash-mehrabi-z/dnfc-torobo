@@ -7,7 +7,7 @@ class Config:
         self.num_consecutive_poses = 4  # Number of consecutive EE poses to stack (1-10)
         self.noise_scale = 0.10 #0.01 #0.10 #0.05
 
-        self.v_name = f"robo_enc_eef_N={self.num_consecutive_poses}_plus_joints_noise={self.noise_scale}" #"6l_linear" #"v_custl_mse"
+        self.v_name = f"robo_enc_eef_N={self.num_consecutive_poses}_plus_joints_noise={self.noise_scale}_only6" #"6l_linear" #"v_custl_mse"
         self.v_name_base = "joint_state_active_enc_scale_action" #"joint_state_frozen_enc" #"4l_base" 
 
         self.episodes_num_ds = 72 #500 #360 #2000
