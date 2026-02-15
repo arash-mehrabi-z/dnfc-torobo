@@ -124,7 +124,7 @@ def run_test(n):
     global val_dataloader, model, criterion, weights_storage_root_dir
     global val_losses_custom, val_losses_torques
     global use_custom_loss, use_baseline
-    global train_info, action_scale
+    global train_info
 
     val_loss_cutsom = 0
     val_loss_torques = 0
@@ -134,9 +134,6 @@ def run_test(n):
         batch_target_repr = batch_data[2].to(device).float()
         batch_action = batch_data[3].to(device).float()
         batch_ee_repr = batch_data[4].to(device).float()
-
-        # Scale actions for training
-        batch_action_scaled = batch_action * action_scale
 
         model.eval()
         with torch.no_grad():
@@ -149,13 +146,10 @@ def run_test(n):
                                                                              batch_state)
 
         if use_custom_loss:
-            # loss_custom, loss_torques = criterion(batch_action_pred, batch_action,
-            #                                     batch_x_des, batch_state,
-            #                                     batch_step)
-            loss_custom, loss_torques = criterion(batch_action_pred, batch_action_scaled,
+            loss_custom, loss_torques = criterion(batch_action_pred, batch_action,
                                                 batch_x_des, batch_x)
         else:
-            loss_torques = criterion(batch_action_pred, batch_action_scaled)
+            loss_torques = criterion(batch_action_pred, batch_action)
             loss_custom = loss_torques
 
         val_loss_cutsom += loss_custom.item() #* batch_state.size(0)
@@ -166,9 +160,7 @@ def run_test(n):
     val_loss_torques /= len(val_dataloader)
     val_losses_torques.append(val_loss_torques**0.5)
 
-    # Scale prediction back to original scale for MAE comparison
-    batch_action_pred_unscaled = batch_action_pred / action_scale
-    act_abs_diff = torch.abs(batch_action_pred_unscaled - batch_action)
+    act_abs_diff = torch.abs(batch_action_pred - batch_action)
     mean_abs_diff = torch.mean(act_abs_diff, dim=0)
     for k in range(7):
         train_info[f'mae_joint_{k+1}_val'].append(mean_abs_diff[k].item())
@@ -286,13 +278,12 @@ num_consecutive_poses = config.num_consecutive_poses  # 1-10, typically 4
 use_baseline = False
 use_image = False
 use_custom_loss = config.use_custom_loss
-num_epochs = 14000 + 1
+num_epochs = 7000 + 1
 batch_size = 256
 learning_rate = 3e-4
 validation_interval = 100
-num_trains = 2
+num_trains = 3
 noise_scale = config.noise_scale #* 4 # Fraction of std to use as noise
-action_scale = config.action_scale  # Scale actions to improve gradient flow
 
 if use_baseline:
     use_custom_loss = False
@@ -347,14 +338,12 @@ for model_complexity in ['high']:#['low', 'medium', 'high', 'xhigh']:
                                 action_dim=action_dim,
                                 enc_hid=enc_hid, cont_hid=cont_hid,
                                 encoded_space_dim=encoded_space_dim,
-                                action_scale=action_scale,
                                 use_image=use_image)
         else:
             model = GeneralModel(encoded_space_dim=encoded_space_dim, target_dim=target_dim,
                                  ee_dim=dataset.ee_dim, state_dim=dataset.state_dim,
                                  action_dim=action_dim,
-                                 enc_hid=enc_hid, cont_hid=cont_hid, 
-                                 action_scale=action_scale,
+                                 enc_hid=enc_hid, cont_hid=cont_hid,
                                  use_image=use_image)
         m = model.to(device)
         num_params = sum(p.numel() for p in m.parameters())/1e3
@@ -454,26 +443,11 @@ for model_complexity in ['high']:#['low', 'medium', 'high', 'xhigh']:
                         batch_diff_noise = model(batch_target_repr, batch_ee_repr_noise,
                                                  batch_state_noisy)
 
-                # Scale actions for training (no noise adjustment since joint_state noise doesn't directly affect action)
-                batch_action_scaled = batch_action * action_scale
-
-                # # After loading dataset - per joint stats
-                # act_min = batch_action_scaled.min(dim=0).values
-                # act_max = batch_action_scaled.max(dim=0).values
-                # act_std = batch_action_scaled.std(dim=0)
-                # act_mean = batch_action_scaled.mean(dim=0)
-                # print("Action stats per joint:")
-                # for j in range(7):
-                #     print(f"  Joint {j+1}: min={act_min[j]:.6f}, max={act_max[j]:.6f}, mean={act_mean[j]:.6f}, std={act_std[j]:.6f}")
-
-
                 if use_custom_loss:
-                    # loss_custom, loss_torques = criterion(batch_action_pred_noise, batch_action_scaled,
-                    #                                       batch_x_des_noise, batch_state, batch_step)
-                    loss_custom, loss_torques = criterion(batch_action_pred_noise, batch_action_scaled,
+                    loss_custom, loss_torques = criterion(batch_action_pred_noise, batch_action,
                                                         batch_x_des_noise, batch_x_noise)
                 else:
-                    loss_torques = criterion(batch_action_pred_noise, batch_action_scaled)
+                    loss_torques = criterion(batch_action_pred_noise, batch_action)
                     loss_custom = loss_torques
 
                 loss_custom.backward()
@@ -494,9 +468,7 @@ for model_complexity in ['high']:#['low', 'medium', 'high', 'xhigh']:
                 print(f"Last epoch taken time: {epoch_time:.3f} seconds")
                 print("loss_torques", loss_torques.item())
 
-                # Scale prediction back to original scale for MAE comparison
-                batch_action_pred_unscaled = batch_action_pred_noise / action_scale
-                act_abs_diff = torch.abs(batch_action_pred_unscaled - batch_action)
+                act_abs_diff = torch.abs(batch_action_pred_noise - batch_action)
                 mean_abs_diff = torch.mean(act_abs_diff, dim=0)
                 for k in range(7):
                     train_info[f'mae_joint_{k+1}_train'].append(mean_abs_diff[k].item())

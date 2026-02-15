@@ -110,8 +110,6 @@ def online_test(tester:Tester, eps_num, use_baseline):
             latent_reps.append(x_des.tolist())
 
         velocities_tensor = torch.squeeze(velocities_tensor, 0)
-        # Scale back to original action range
-        velocities_tensor = velocities_tensor / config.action_scale
         state[:7] += (5*velocities_tensor)
 
         comm.create_and_pub_msg(state[:7])

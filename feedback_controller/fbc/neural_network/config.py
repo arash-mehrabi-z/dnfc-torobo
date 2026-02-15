@@ -5,7 +5,7 @@ class Config:
         self.num_steps = 299
         self.C = 1e-5
         self.num_consecutive_poses = 4  # Number of consecutive EE poses to stack (1-10)
-        self.noise_scale = 0.01 #0.10 #0.05
+        self.noise_scale = 0.10 #0.01 #0.10 #0.05
 
         self.v_name = f"robo_enc_eef_N={self.num_consecutive_poses}_plus_joints_noise={self.noise_scale}" #"6l_linear" #"v_custl_mse"
         self.v_name_base = "joint_state_active_enc_scale_action" #"joint_state_frozen_enc" #"4l_base" 
@@ -26,7 +26,6 @@ class Config:
         self.onehot_dim = 4
         self.step_dim = 1
         self.encoded_space_dim = 14 #14 #128 #32  # Latent space dimension for encoders
-        self.action_scale = 50  # Scale factor for action outputs (improves gradient flow)
 
         # self.num_params = 24.085 #6.037 #36.117
         # self.num_params_base = 24.091 #6.039 #36.109

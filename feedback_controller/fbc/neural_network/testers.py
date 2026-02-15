@@ -37,6 +37,7 @@ class Tester():
 
         dataset_path = os.path.join(self.cur_file_dir_path,
                                     f'data/torobo/{self.config.dataset_name}/{self.config.ds_test_file}')
+                                    # f'data/torobo/{self.config.dataset_name}/{self.config.ds_file_name}')
         self.dataset = np.load(dataset_path, allow_pickle=True, encoding='latin1')
         print("Tester loaded dataset with shape:", self.dataset.shape)
         print("from this path", dataset_path)
@@ -55,14 +56,12 @@ class Tester():
             action_dim=self.joint_size,
             enc_hid=enc_hid,
             cont_hid=cont_hid,
-            action_scale=self.config.action_scale,
             use_image=False)
         self.baseline = MLPBaseline(target_dim=self.target_size + self.onehot_size,
                                     state_dim=self.state_size,
                                     action_dim=self.joint_size,
                                     enc_hid=enc_hid, cont_hid=cont_hid,
                                     encoded_space_dim=self.config.encoded_space_dim,
-                                    action_scale=self.config.action_scale,
                                     use_image=False)
         
         m = self.model.to(self.device)
@@ -245,6 +244,7 @@ class Tester():
             state[7:] = velocities_tensor
 
             if path_point==0 and self.close_enough(state, grepB):
+            # if path_point==0 and self.close_enough(state[:7], grepB):
                 # print(i)
                 path_point = 1
                 one_hot = [1, 0, 0, 0]
@@ -253,6 +253,7 @@ class Tester():
                     print(self.get_end_eff(x_des))
 
             elif path_point==1 and self.close_enough(state, putB):
+            # elif path_point==1 and self.close_enough(state[:7], putB):
                 path_point = 2
                 one_hot = [0, 1, 0, 0]
                 if print_it_out:
@@ -260,6 +261,7 @@ class Tester():
                     print(self.get_end_eff(x_des))
 
             elif path_point==2 and self.close_enough(state, grepC):
+            # elif path_point==2 and self.close_enough(state[:7], grepC):
                 path_point = 3
                 one_hot = [0, 0, 1, 0]           
                 if print_it_out:
@@ -267,6 +269,7 @@ class Tester():
                     print(self.get_end_eff(x_des))
 
             elif path_point==3 and self.close_enough(state, putC):
+            # elif path_point==3 and self.close_enough(state[:7], putC):
                 path_point = 4
                 one_hot=[0, 0, 0, 1]   
                 if print_it_out:
