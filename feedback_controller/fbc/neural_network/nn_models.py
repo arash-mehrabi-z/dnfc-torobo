@@ -180,7 +180,7 @@ class GeneralModel(nn.Module):
     """
     Two-stream encoder model:
     - Stream 1: Encodes target_repr (goal representation)
-    - Stream 2: Encodes ee_repr + joint_state (N consecutive end-effector poses + joint positions/velocities)
+    - Stream 2: Encodes ee_repr + joint #6 position & velocity
     - Difference between encoded streams → controller → action
     """
     def __init__(self, encoded_space_dim, target_dim, ee_dim, state_dim, action_dim,
@@ -192,8 +192,8 @@ class GeneralModel(nn.Module):
             # Target encoder: target_dim (13) → enc_hid → encoded_space_dim
             self.target_enc = MLP_2L(target_dim, enc_hid, encoded_space_dim)
 
-        # EE + state encoder: (ee_dim + state_dim) → enc_hid → encoded_space_dim
-        self.ee_enc = MLP_2L(ee_dim + state_dim, enc_hid, encoded_space_dim)
+        # EE + joint6 encoder: ee_repr + joint #6 pos + joint #6 vel = ee_dim + 2
+        self.ee_enc = MLP_2L(ee_dim + 2, enc_hid, encoded_space_dim)
 
         # Controller/decoder: takes difference and outputs action
         self.controller = MLP_2L(encoded_space_dim, cont_hid, action_dim)
@@ -203,8 +203,11 @@ class GeneralModel(nn.Module):
         # Encode target (desired state representation)
         x_des = self.target_enc(target_repr)  # (batch_size, encoded_space_dim)
 
-        # Concatenate EE pose history with joint state and encode
-        ee_state_combined = torch.cat([ee_repr, joint_state], dim=1)
+        # Extract joint #6 position (index 5) and velocity (index 12)
+        joint6_state = torch.cat([joint_state[:, 5:6], joint_state[:, 12:13]], dim=1)
+
+        # Concatenate EE pose history with joint #6 state and encode
+        ee_state_combined = torch.cat([ee_repr, joint6_state], dim=1)
         x_curr = self.ee_enc(ee_state_combined)  # (batch_size, encoded_space_dim)
 
         # Compute difference: where we want to be - where we are
