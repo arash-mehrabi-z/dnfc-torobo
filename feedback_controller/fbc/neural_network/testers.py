@@ -62,7 +62,7 @@ class Tester():
                                     ee_dim=self.ee_dim,
                                     state_dim=self.state_size,
                                     action_dim=self.joint_size,
-                                    enc_hid=enc_hid, cont_hid=cont_hid,
+                                    enc_hid=lin_hid, cont_hid=lin_out,
                                     use_image=False)
         
         m = self.model.to(self.device)
