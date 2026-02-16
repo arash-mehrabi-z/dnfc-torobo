@@ -507,10 +507,53 @@ class Tester():
 
     def calculate_cartesian_perform(self, use_baseline):
         point_reached = 0
-        for num in range(self.dataset.shape[0]): 
-            point_reached += self.get_emulated(use_baseline, num, 
+        for num in range(self.dataset.shape[0]):
+            point_reached += self.get_emulated(use_baseline, num,
                                                False, True)[7]
-        return point_reached/(4*self.dataset.shape[0])   
+        return point_reached/(4*self.dataset.shape[0])
+
+    def calculate_cartesian_perform_with_dtw(self, use_baseline):
+        """Calculate both milestone score and DTW metric across all trajectories.
+
+        Returns:
+            score: Fraction of milestones reached (same as calculate_cartesian_perform)
+            avg_dtw: Average DTW distance across all trajectories
+            avg_dtw_norm: Average normalized DTW distance across all trajectories
+        """
+        from dtw import dtw
+
+        point_reached = 0
+        dtw_distances = []
+        dtw_norm_distances = []
+
+        for num in range(self.dataset.shape[0]):
+            # Get emulated trajectory (joint positions) and milestone score
+            result = self.get_emulated(use_baseline, num, False, True)
+            y1, y2, y3, y4, y5, y6, y7, path_point = result
+            point_reached += path_point
+
+            # Convert emulated joint positions to Cartesian coordinates
+            emulated_coords = []
+            for i in range(len(y1)):
+                q9 = np.array([0, 0, y1[i], y2[i], y3[i], y4[i], y5[i], y6[i], y7[i]])
+                p, R = self.kin.forwardkin(1, q9)
+                emulated_coords.append([p[0], p[1], p[2]])
+            emulated_coords = np.array(emulated_coords)
+
+            # Get ground truth Cartesian coordinates
+            x_gt, y_gt, z_gt = self.get_real_coordinates(num)
+            gt_coords = np.array(list(zip(x_gt, y_gt, z_gt)))
+
+            # Compute DTW
+            alignment = dtw(emulated_coords, gt_coords)
+            dtw_distances.append(alignment.distance)
+            dtw_norm_distances.append(alignment.normalizedDistance)
+
+        score = point_reached / (4 * self.dataset.shape[0])
+        avg_dtw = np.mean(dtw_distances)
+        avg_dtw_norm = np.mean(dtw_norm_distances)
+
+        return score, avg_dtw, avg_dtw_norm
 
     def get_end_eff(self, js):
         my_l = [0, 0]
