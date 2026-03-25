@@ -294,7 +294,7 @@ for i in range(7):
     train_info[f'mae_joint_{i+1}_val'] = []
     train_info[f'mae_joint_{i+1}_train'] = []
 
-for model_complexity in ['high']:#['low', 'medium', 'high', 'xhigh']:
+for model_complexity in ['low']:#['low', 'medium', 'high', 'xhigh']:
     enc_hid, cont_hid, lin_hid, lin_out = config.get_model_dims(model_complexity)
     
     for i_train in range(num_trains):

@@ -65,7 +65,7 @@ class Config:
         if model_complexity == 'low':
             enc_hid = 128 // 2
             cont_hid = 384 // 2
-            lin_hid = 60
+            lin_hid = 92
             lin_out = 64
         elif model_complexity == 'medium':
             enc_hid = 128
@@ -75,8 +75,10 @@ class Config:
         elif model_complexity == 'high':
             enc_hid = 128 * 2
             cont_hid = 384 * 2
-            lin_hid = 128 * 2 #2*27-3
-            lin_out = 470 #192 * 2
+            # lin_hid = 128 * 2 #2*27-3
+            # lin_out = 470 #192 * 2
+            lin_hid = 364 #2*27-3
+            lin_out = 192 #192 * 2
         elif model_complexity == 'xhigh':
             enc_hid = 128 * 4
             cont_hid = 384 * 4
