@@ -7,7 +7,7 @@ class Config:
 
         self.v_name = "img_enc" #"2+2l_lat:sub-nvel" #"6l_linear" #"v_custl_mse"
         self.v_name_base = "3l_base" #"4l_base"
-        self.v_name_two_stream = "two_stream_base"
+        self.v_name_two_stream = "two_stream_two_encs_combine_latent_base"
         self.num_history_images = 3
         self.image_size = (128, 128)
 
