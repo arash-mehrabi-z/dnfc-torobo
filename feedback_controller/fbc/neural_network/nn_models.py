@@ -259,23 +259,23 @@ class ImageStackEncoder(nn.Module):
 
 
 class TwoStreamBaseline(nn.Module):
-    def __init__(self, target_dim, mlp_hidden, mlp_latent,
+    def __init__(self, target_dim, mlp_hidden_1, mlp_hidden_2, mlp_latent,
                  num_images, cnn_latent,
-                 decoder_hidden, action_dim):
+                 decoder_hidden_1, decoder_hidden_2, action_dim):
         super().__init__()
-        self.mlp_encoder = MLP_2L(target_dim, mlp_hidden, mlp_latent)
-        self.cnn_encoder = ImageStackEncoder(num_images, cnn_latent)
-        self.decoder = nn.Sequential(
-            nn.Linear(mlp_latent + cnn_latent, decoder_hidden),
-            nn.ReLU(True),
-            nn.Linear(decoder_hidden, action_dim),
-        )
-        self.decoder[-1].bias.data.fill_(0.0)
+        self.mlp_encoder = MLP_3L(target_dim, mlp_hidden_1, mlp_hidden_2, mlp_latent)
+        # Separate encoder for each camera view
+        self.cnn_encoder_front = ImageStackEncoder(num_images, cnn_latent)
+        self.cnn_encoder_side = ImageStackEncoder(num_images, cnn_latent)
+        # Decoder: mlp_latent + 2 * cnn_latent (one per camera) -> action
+        self.decoder = MLP_3L(mlp_latent + 2 * cnn_latent,
+                              decoder_hidden_1, decoder_hidden_2, action_dim)
+        self.decoder.linear[-1].bias.data.fill_(0.0)
 
-    def forward(self, target_repr, image_stack):
+    def forward(self, target_repr, image_stack_front, image_stack_side):
         mlp_out = self.mlp_encoder(target_repr)
-        cnn_out = self.cnn_encoder(image_stack)
-        combined = torch.cat((mlp_out, cnn_out), dim=1)
+        cnn_out_front = self.cnn_encoder_front(image_stack_front)
+        cnn_out_side = self.cnn_encoder_side(image_stack_side)
+        combined = torch.cat((mlp_out, cnn_out_front, cnn_out_side), dim=1)
         action_pred = self.decoder(combined)
-        action_pred = F.tanh(action_pred)
         return action_pred

@@ -11,21 +11,21 @@ class Config:
         self.num_history_images = 3
         self.image_size = (128, 128)
 
-        self.episodes_num_ds = 72 #500 #360 #2000
+        self.episodes_num_ds = 360 #72 #500 #360 #2000
         self.dataset_name = f"trajs:{self.episodes_num_ds}_blocks:3" +\
-            "_tri_img" #"_triangle_v_scarce" #"_random"
+            "_imgs_2cams" #"_tri_img" #"_triangle_v_scarce" #"_random"
         self.ds_ratio = "interp_0.85" #"ds" #"extrap_0.85" #"interp_0.95" #0.263
         self.ds_file_name = f'train_{self.ds_ratio}.npy'
         self.ds_ratio_test = self.ds_ratio #"interp_0.85"
         self.ds_test_file = f'test_{self.ds_ratio_test}.npy'
         self.train_val_file = f'split_indices_{self.ds_ratio}.pt'
 
+        self.step_dim = 1
         self.joints_num = 7
         self.state_dim = 2*self.joints_num
-        self.coords_dim = 3*3
+        self.coords_dim = 3 * 2 #3*3
         self.action_dim = self.joints_num
         self.onehot_dim = 4
-        self.step_dim = 1
 
         # self.num_params = 24.085 #6.037 #36.117
         # self.num_params_base = 24.091 #6.039 #36.109
@@ -92,26 +92,34 @@ class Config:
 
     def get_two_stream_dims(self, model_complexity):
         if model_complexity == 'low':
-            mlp_hidden = 32
+            mlp_hidden_1 = 32
+            mlp_hidden_2 = 24
             mlp_latent = 16
             cnn_latent = 32
-            decoder_hidden = 32
+            decoder_hidden_1 = 32
+            decoder_hidden_2 = 24
         elif model_complexity == 'medium':
-            mlp_hidden = 64
+            mlp_hidden_1 = 64
+            mlp_hidden_2 = 48
             mlp_latent = 32
             cnn_latent = 64
-            decoder_hidden = 64
+            decoder_hidden_1 = 64
+            decoder_hidden_2 = 48
         elif model_complexity == 'high':
-            mlp_hidden = 128
-            mlp_latent = 64
+            mlp_hidden_1 = 128
+            mlp_hidden_2 = mlp_hidden_1
+            mlp_latent = 32
             cnn_latent = 128
-            decoder_hidden = 128
+            decoder_hidden_1 = 512
+            decoder_hidden_2 = 384
         elif model_complexity == 'xhigh':
-            mlp_hidden = 256
+            mlp_hidden_1 = 256
+            mlp_hidden_2 = 192
             mlp_latent = 128
             cnn_latent = 256
-            decoder_hidden = 256
+            decoder_hidden_1 = 256
+            decoder_hidden_2 = 192
         else:
             raise Exception("Model complexity is not defined.")
 
-        return mlp_hidden, mlp_latent, cnn_latent, decoder_hidden
+        return mlp_hidden_1, mlp_hidden_2, mlp_latent, cnn_latent, decoder_hidden_1, decoder_hidden_2

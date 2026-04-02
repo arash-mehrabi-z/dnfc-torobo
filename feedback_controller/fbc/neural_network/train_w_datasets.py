@@ -126,7 +126,7 @@ class TwoStreamDataset(Dataset):
             transforms.Resize(image_size),
             transforms.ToTensor(),
         ])
-        self.img_dir = os.path.join(ds_root_dir, "triangle_images")
+        self.img_dir = os.path.join(ds_root_dir, "triangle_images_fixed_cam")
 
     def __len__(self):
         return self.num_trajectories * self.num_steps
@@ -146,10 +146,9 @@ class TwoStreamDataset(Dataset):
 
         # Get the original trajectory folder number from the mapping
         original_traj_no = self.traj_indices[traj_no]
-        print(f"{traj_no} and {original_traj_no}")
 
-        # Load last num_history_images images (including current)
-        images = []
+        # Load last num_history_images images from FRONT camera
+        images_front = []
         for i in range(self.num_history_images - 1, -1, -1):
             img_step = max(0, step_no - i)
             img_path = os.path.join(
@@ -157,11 +156,24 @@ class TwoStreamDataset(Dataset):
                 f"traj_{original_traj_no:03d}/step_{img_step:03d}.jpg")
             image = Image.open(img_path).convert('RGB')
             image = self.transform(image)
-            images.append(image)
+            images_front.append(image)
 
-        image_stack = torch.cat(images, dim=0)  # (num_images * 3, H, W)
+        image_stack_front = torch.cat(images_front, dim=0)  # (num_images * 3, H, W)
 
-        return step, state, target_repr, image_stack, action
+        # Load last num_history_images images from SIDE camera
+        images_side = []
+        for i in range(self.num_history_images - 1, -1, -1):
+            img_step = max(0, step_no - i)
+            img_path = os.path.join(
+                self.img_dir,
+                f"traj_side_{original_traj_no:03d}/step_{img_step:03d}.jpg")
+            image = Image.open(img_path).convert('RGB')
+            image = self.transform(image)
+            images_side.append(image)
+
+        image_stack_side = torch.cat(images_side, dim=0)  # (num_images * 3, H, W)
+
+        return step, state, target_repr, image_stack_front, image_stack_side, action
 
 
 def log_loss(n, val_loss_cutsom, val_loss_torques):
@@ -197,15 +209,16 @@ def run_test(n):
         batch_target_repr = batch_data[2].to(device).float()
 
         if use_two_stream:
-            batch_images = batch_data[3].to(device).float()
-            batch_action = batch_data[4].to(device).float()
+            batch_images_front = batch_data[3].to(device).float()
+            batch_images_side = batch_data[4].to(device).float()
+            batch_action = batch_data[5].to(device).float()
         else:
             batch_action = batch_data[3].to(device).float()
 
         model.eval()
         with torch.no_grad():
             if use_two_stream:
-                batch_action_pred = model(batch_target_repr, batch_images)
+                batch_action_pred = model(batch_target_repr, batch_images_front, batch_images_side)
             elif use_baseline:
                 nn_input = torch.cat((batch_target_repr, batch_state), dim=1)
                 batch_action_pred = model(nn_input)
@@ -349,11 +362,11 @@ use_baseline = False
 use_image = False
 use_two_stream = True
 use_custom_loss = config.use_custom_loss
-num_epochs = 100000 + 1 
+num_epochs = 12000 + 1 
 batch_size = 128
-learning_rate = 3e-3
+learning_rate = 3e-4
 validation_interval = 100
-num_trains = 10
+num_trains = 3
 noise_std = 0.004
 
 if use_baseline or use_two_stream:
@@ -406,13 +419,17 @@ for model_complexity in ['high']: #'low', 'medium', 'high', 'xhigh']:
         print("val_set:", len(val_set))
 
         if use_two_stream:
-            mlp_hidden, mlp_latent, cnn_latent, decoder_hidden = \
+            mlp_hidden_1, mlp_hidden_2, mlp_latent, cnn_latent, \
+                decoder_hidden_1, decoder_hidden_2 = \
                 config.get_two_stream_dims(model_complexity)
             model = TwoStreamBaseline(target_dim=target_dim,
-                                      mlp_hidden=mlp_hidden, mlp_latent=mlp_latent,
+                                      mlp_hidden_1=mlp_hidden_1,
+                                      mlp_hidden_2=mlp_hidden_2,
+                                      mlp_latent=mlp_latent,
                                       num_images=config.num_history_images,
                                       cnn_latent=cnn_latent,
-                                      decoder_hidden=decoder_hidden,
+                                      decoder_hidden_1=decoder_hidden_1,
+                                      decoder_hidden_2=decoder_hidden_2,
                                       action_dim=action_dim)
         elif use_baseline:
             model = MLPBaseline(inp_dim=encoded_space_dim+target_dim,
@@ -489,8 +506,9 @@ for model_complexity in ['high']: #'low', 'medium', 'high', 'xhigh']:
                 batch_target_repr = batch_data[2].to(device).float()
 
                 if use_two_stream:
-                    batch_images = batch_data[3].to(device).float()
-                    batch_action = batch_data[4].to(device).float()
+                    batch_images_front = batch_data[3].to(device).float()
+                    batch_images_side = batch_data[4].to(device).float()
+                    batch_action = batch_data[5].to(device).float()
                 else:
                     batch_action = batch_data[3].to(device).float()
 
@@ -501,7 +519,7 @@ for model_complexity in ['high']: #'low', 'medium', 'high', 'xhigh']:
 
                 optimizer.zero_grad()
                 if use_two_stream:
-                    batch_action_pred_noise = model(batch_target_repr, batch_images)
+                    batch_action_pred_noise = model(batch_target_repr, batch_images_front, batch_images_side)
                     batch_action_noise = batch_action
                 elif use_baseline:
                     nn_input = torch.cat((batch_target_repr, batch_state_noise), dim=1)
