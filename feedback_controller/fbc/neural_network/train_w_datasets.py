@@ -176,6 +176,47 @@ class TwoStreamDataset(Dataset):
         return step, state, target_repr, image_stack_front, image_stack_side, action
 
 
+def visualize_image_stack(image_stack_front, image_stack_side, save_path, idx=0):
+    """
+    Visualize images from both cameras for a single sample.
+
+    Args:
+        image_stack_front: Tensor of shape (B, num_images*3, H, W)
+        image_stack_side: Tensor of shape (B, num_images*3, H, W)
+        save_path: Path to save the visualization
+        idx: Which sample in the batch to visualize
+    """
+    # Get single sample and move to CPU
+    front = image_stack_front[idx].cpu()
+    side = image_stack_side[idx].cpu()
+
+    num_images = front.shape[0] // 3  # e.g., 9 channels / 3 = 3 images
+
+    fig, axes = plt.subplots(2, num_images, figsize=(4*num_images, 8))
+
+    for i in range(num_images):
+        # Extract each RGB image (channels 3*i to 3*i+3)
+        img_front = front[3*i:3*i+3]
+        img_side = side[3*i:3*i+3]
+
+        # Clamp to [0, 1] and convert to (H, W, C)
+        img_front = img_front.clamp(0, 1).permute(1, 2, 0).numpy()
+        img_side = img_side.clamp(0, 1).permute(1, 2, 0).numpy()
+
+        axes[0, i].imshow(img_front)
+        axes[0, i].set_title(f'Front t-{num_images-1-i}')
+        axes[0, i].axis('off')
+
+        axes[1, i].imshow(img_side)
+        axes[1, i].set_title(f'Side t-{num_images-1-i}')
+        axes[1, i].axis('off')
+
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close(fig)
+    print(f"Saved sample images to {save_path}")
+
+
 def log_loss(n, val_loss_cutsom, val_loss_torques):
     global weights_storage_root_dir
     global train_loss_custom, train_loss_torques
@@ -363,7 +404,7 @@ use_image = False
 use_two_stream = True
 use_custom_loss = config.use_custom_loss
 num_epochs = 12000 + 1 
-batch_size = 128
+batch_size = 256
 learning_rate = 3e-4
 validation_interval = 100
 num_trains = 3
@@ -446,8 +487,10 @@ for model_complexity in ['high']: #'low', 'medium', 'high', 'xhigh']:
         # selected_val_ind = random.sample(val_set.indices, k=3)
         # selected_train_idx = random.sample(train_set.indices, k=1)[0]
 
-        train_dataloader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
-        val_dataloader = DataLoader(val_set, batch_size=batch_size, shuffle=False)
+        train_dataloader = DataLoader(train_set, batch_size=batch_size, shuffle=True,
+                                       num_workers=4, pin_memory=True, persistent_workers=True)
+        val_dataloader = DataLoader(val_set, batch_size=batch_size, shuffle=False,
+                                    num_workers=2, pin_memory=True, persistent_workers=True)
 
         # Loss
         if use_custom_loss:
@@ -509,6 +552,11 @@ for model_complexity in ['high']: #'low', 'medium', 'high', 'xhigh']:
                     batch_images_front = batch_data[3].to(device).float()
                     batch_images_side = batch_data[4].to(device).float()
                     batch_action = batch_data[5].to(device).float()
+                    # # Visualize sample images on first batch of first epoch
+                    # if n == 0 and i == 0:
+                    #     print(f"Image tensor shape: {batch_images_front.shape}")  # Should be (B, 9, 128, 128)
+                    #     vis_path = os.path.join(weights_storage_root_dir, "sample_images.png")
+                    #     visualize_image_stack(batch_images_front, batch_images_side, vis_path)
                 else:
                     batch_action = batch_data[3].to(device).float()
 
