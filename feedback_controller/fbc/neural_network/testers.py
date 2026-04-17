@@ -20,7 +20,7 @@ class Tester():
         self.onehot_size = self.config.onehot_dim
         
         self.cur_file_dir_path = os.path.dirname(__file__)
-        self.device = 'cpu'  # Force CPU to avoid CUDA library conflicts; change back to 'cuda' once resolved
+        self.device = 'cpu' #'cuda' if torch.cuda.is_available() else 'cpu'
 
         # self.load_model(train_no=0, epoch_no=0, 
         #                 use_custom_loss=self.config.use_custom_loss,
@@ -36,58 +36,88 @@ class Tester():
         self.criterion = nn.L1Loss()
         self.criterion_mse = nn.MSELoss(reduction='sum')
 
-    def load_model(self, train_no, epoch_no, use_custom_loss, model_complexity):
+    def load_model(self, train_no, epoch_no, use_custom_loss, model_complexity,
+                   use_image=False):
 
-        enc_hid, cont_hid, lin_hid, lin_out = self.config.get_model_dims(model_complexity)
-        self.model = GeneralModel(self.state_size, self.target_size+self.onehot_size, 
-                                  self.joint_size,
-                                  enc_hid, cont_hid, 
-                                  use_image=False)
-        self.baseline = MLPBaseline(self.state_size + (self.target_size+self.onehot_size),
-                                    lin_hid, lin_out,
-                                    self.joint_size)
-        
-        m = self.model.to(self.device)
-        model_name_dnfc = self.config.get_model_name(False, use_custom_loss, False)
-        # model_name_dnfc = self.config.add_params_to_name(model_name_dnfc, m)
-        num_params = self.config.get_params_num(m)
-        model_name_dnfc += f"|{num_params}K_params"
+        if use_image:
+            # Load GeneralModel with image-based target representation
+            cnn_latent, cont_hid = self.config.get_image_model_dims(model_complexity)
+            self.model = GeneralModel(
+                encoded_space_dim=self.state_size,
+                target_dim=self.target_size + self.onehot_size,
+                action_dim=self.joint_size,
+                enc_hid=0,
+                cont_hid=cont_hid,
+                use_image=True,
+                cnn_latent=cnn_latent,
+                onehot_dim=self.onehot_size
+            )
 
-        m = self.baseline.to(self.device)
-        model_name_base = self.config.get_model_name(True, False, False)
-        # model_name_base = self.config.add_params_to_name(model_name_base, m)
-        num_params = self.config.get_params_num(m)
-        model_name_base += f"|{num_params}K_params"
+            m = self.model.to(self.device)
+            model_name = self.config.get_model_name(False, use_custom_loss, use_image=True)
+            num_params = self.config.get_params_num(m)
+            model_name += f"|{num_params}K_params"
 
-        dnfc_adr = f'weights/{self.config.dataset_name}|{self.config.ds_ratio}|{model_name_dnfc}' + \
-            f'/train_no_{train_no}/fbc_{epoch_no}.pth'
-        base_adr = f'weights/{self.config.dataset_name}|{self.config.ds_ratio}|{model_name_base}' + \
-            f'/train_no_{train_no}/fbc_{epoch_no}.pth'
+            model_adr = f'weights/{self.config.dataset_name}|{self.config.ds_ratio}|{model_name}' + \
+                f'/train_no_{train_no}/fbc_{epoch_no}.pth'
+            model_path = os.path.join(self.cur_file_dir_path, model_adr)
+            self.model.load_state_dict(torch.load(
+                model_path,
+                map_location=torch.device(self.device),
+                weights_only=True))
+            print("***\nLoaded GeneralModel (use_image=True) weights from", model_path)
+        else:
+            enc_hid, cont_hid, lin_hid, lin_out = self.config.get_model_dims(model_complexity)
+            self.model = GeneralModel(self.state_size, self.target_size+self.onehot_size,
+                                      self.joint_size,
+                                      enc_hid, cont_hid,
+                                      use_image=False)
+            self.baseline = MLPBaseline(self.state_size + (self.target_size+self.onehot_size),
+                                        lin_hid, lin_out,
+                                        self.joint_size)
 
-        dnfc_path = os.path.join(self.cur_file_dir_path, dnfc_adr)
-        base_path = os.path.join(self.cur_file_dir_path, base_adr)
-        self.model.load_state_dict(torch.load(dnfc_path, 
-                                              map_location=torch.device(self.device),
-                                              weights_only=True))
-        self.baseline.load_state_dict(torch.load(base_path, 
-                                                 map_location=torch.device(self.device),
-                                                 weights_only=True))
-        print("***\nLoaded model weights from", dnfc_path)
-        print("Loaded baseline weights from", base_path)
+            m = self.model.to(self.device)
+            model_name_dnfc = self.config.get_model_name(False, use_custom_loss, False)
+            num_params = self.config.get_params_num(m)
+            model_name_dnfc += f"|{num_params}K_params"
+
+            m = self.baseline.to(self.device)
+            model_name_base = self.config.get_model_name(True, False, False)
+            num_params = self.config.get_params_num(m)
+            model_name_base += f"|{num_params}K_params"
+
+            dnfc_adr = f'weights/{self.config.dataset_name}|{self.config.ds_ratio}|{model_name_dnfc}' + \
+                f'/train_no_{train_no}/fbc_{epoch_no}.pth'
+            base_adr = f'weights/{self.config.dataset_name}|{self.config.ds_ratio}|{model_name_base}' + \
+                f'/train_no_{train_no}/fbc_{epoch_no}.pth'
+
+            dnfc_path = os.path.join(self.cur_file_dir_path, dnfc_adr)
+            base_path = os.path.join(self.cur_file_dir_path, base_adr)
+            self.model.load_state_dict(torch.load(dnfc_path,
+                                                  map_location=torch.device(self.device),
+                                                  weights_only=True))
+            self.baseline.load_state_dict(torch.load(base_path,
+                                                     map_location=torch.device(self.device),
+                                                     weights_only=True))
+            print("***\nLoaded model weights from", dnfc_path)
+            print("Loaded baseline weights from", base_path)
         
 
     def load_two_stream_model(self, train_no, epoch_no, model_complexity):
-        mlp_hidden, mlp_latent, cnn_latent, decoder_hidden = \
+        mlp_hidden_1, mlp_hidden_2, mlp_latent, cnn_latent, \
+            decoder_hidden_1, decoder_hidden_2 = \
             self.config.get_two_stream_dims(model_complexity)
 
         target_dim = self.target_size + self.onehot_size
         self.two_stream_model = TwoStreamBaseline(
             target_dim=target_dim,
-            mlp_hidden=mlp_hidden,
+            mlp_hidden_1=mlp_hidden_1,
+            mlp_hidden_2=mlp_hidden_2,
             mlp_latent=mlp_latent,
             num_images=self.config.num_history_images,
             cnn_latent=cnn_latent,
-            decoder_hidden=decoder_hidden,
+            decoder_hidden_1=decoder_hidden_1,
+            decoder_hidden_2=decoder_hidden_2,
             action_dim=self.joint_size
         )
 
@@ -156,9 +186,11 @@ class Tester():
         
         milestones = self.get_changes_indexes(num)
 
-        obstA = torch.tensor(goal[0:3])
-        obstB = torch.tensor(goal[3:6])
-        obstC = torch.tensor(goal[6:9])
+        # 6D coordinates: x,y for 3 objects (z is fixed at 0.865)
+        z_fixed = 0.865
+        obstA = torch.tensor([goal[0], goal[1], z_fixed])
+        obstB = torch.tensor([goal[2], goal[3], z_fixed])
+        obstC = torch.tensor([goal[4], goal[5], z_fixed])
         grepB = [obstB[0], obstB[1], 0.87]
         putB = [obstA[0], obstA[1], 0.9]
         grepC = [obstC[0], obstC[1], 0.87]
@@ -399,10 +431,11 @@ class Tester():
 
 
     def get_obs_coordinates(self, num):
+        # 6D coordinates: x,y for 3 objects
         elem = self.dataset[num]
-        obstA = elem[1][1+self.state_size:1+self.state_size+(1*3)]
-        obstB = elem[1][1+self.state_size+(1*3):1+self.state_size+(2*3)]
-        obstC = elem[1][1+self.state_size+(2*3):1+self.state_size+(3*3)]
+        obstA = elem[1][1+self.state_size:1+self.state_size+(1*2)]
+        obstB = elem[1][1+self.state_size+(1*2):1+self.state_size+(2*2)]
+        obstC = elem[1][1+self.state_size+(2*2):1+self.state_size+(3*2)]
 
         return obstA, obstB, obstC
 

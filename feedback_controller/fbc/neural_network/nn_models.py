@@ -176,38 +176,84 @@ class MLP_3L(nn.Module):
         return x
         
     
-class GeneralModel(nn.Module):
-    def __init__(self, encoded_space_dim, target_dim, action_dim,
-                 enc_hid, cont_hid, use_image):
+class SingleImageEncoder(nn.Module):
+    """CNN encoder for a single RGB image (front camera at t=0)."""
+    def __init__(self, cnn_latent):
         super().__init__()
+        self.cnn = nn.Sequential(
+            nn.Conv2d(3, 32, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(True),
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(True),
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(True),
+            nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(True),
+            nn.AdaptiveAvgPool2d(1),
+        )
+        self.flatten = nn.Flatten(start_dim=1)
+        self.fc = nn.Linear(128, cnn_latent)
+
+    def forward(self, x):
+        x = self.cnn(x)
+        x = self.flatten(x)
+        x = self.fc(x)
+        return x
+
+
+class GeneralModel(nn.Module):
+    """
+    When use_image=True:
+        - target_repr: single image at t=0 (front camera) -> CNN -> cnn_latent
+        - Concatenate touch_history (one-hot, onehot_dim) after CNN
+        - Map to state space (x_des)
+        - state: robot joints + velocities (encoded_space_dim) used directly
+        - diff = x_des - state
+        - Controller predicts action from diff
+
+    When use_image=False:
+        - target_repr: coordinates + one-hot -> MLP encoder -> x_des
+        - state: robot joints + velocities
+        - diff = x_des - state
+        - Controller predicts action from diff
+    """
+    def __init__(self, encoded_space_dim, target_dim, action_dim,
+                 enc_hid, cont_hid, use_image, cnn_latent=128, onehot_dim=4):
+        super().__init__()
+        self.use_image = use_image
+
         if use_image:
-            # self.enc = Encoder(encoded_space_dim)
-            self.enc = AlexNetPT(encoded_space_dim)
+            # CNN encoder for single target image (3 channels RGB)
+            self.cnn_encoder = SingleImageEncoder(cnn_latent)
+            # Map CNN latent + one_hot to state space
+            combined_dim = cnn_latent + onehot_dim
+            self.to_state_space = MLP_2L(combined_dim, 2 * combined_dim, encoded_space_dim)
+            # 3-layer controller for image mode
+            self.mlp_controller = MLP_3L(encoded_space_dim, cont_hid, cont_hid, action_dim)
+            self.mlp_controller.linear[-1].bias.data.fill_(0.0)
         else:
             self.enc1 = MLP_2L(target_dim, enc_hid, encoded_space_dim)
-            # self.enc2 = MLP_3L(256, 256, 128, encoded_space_dim)
+            self.mlp_controller = MLP_2L(encoded_space_dim, cont_hid, action_dim)
+            self.mlp_controller.linear[-1].bias.data.fill_(0.0)
 
-        self.mlp_controller = MLP_2L(encoded_space_dim, cont_hid, action_dim)
-        # self.mlp_controller2 = MLP_2L(96, 32, action_dim)
-        # self.linear = nn.Sequential(
-        #     nn.Linear(encoded_space_dim, action_dim)
-        # )
-        self.mlp_controller.linear[-1].bias.data.fill_(0.0)
-
-    def forward(self, target_repr, state):
+    def forward(self, target_repr, state, touch_history=None):
         x = state
-        # x_des = self.alexnet(img_tensor)
-        x_des = self.enc1(target_repr) # (batch_size, encoded_space_dim)
-        # x_des = self.enc2(F.relu(x_des)) # (batch_size, encoded_space_dim)
+
+        if self.use_image:
+            # target_repr is an image at t=0
+            cnn_out = self.cnn_encoder(target_repr)
+            # Concatenate with touch history (one-hot)
+            combined = torch.cat((cnn_out, touch_history), dim=1)
+            # Map to state space (x_des)
+            x_des = self.to_state_space(combined)
+        else:
+            x_des = self.enc1(target_repr)
 
         diff = x_des - x
-        inp_lat_mlp = diff
-        # inp_lat_mlp = torch.cat((diff, state), dim=1)
 
-        acts_pred = self.mlp_controller(inp_lat_mlp)
-        # acts_pred = self.mlp_controller2(F.relu(acts_pred))
-        
-        acts_pred = F.tanh(acts_pred)
+        acts_pred = self.mlp_controller(diff)
+        # acts_pred = F.tanh(acts_pred)
+
         return acts_pred, x_des, diff
     
 

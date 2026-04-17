@@ -31,32 +31,70 @@ from config import Config
 
 
 class TrajectoryDataset(Dataset):
-    def __init__(self, ds_root_dir, file_name, 
-                 joint_dim, target_dim, use_image=False):
+    def __init__(self, ds_root_dir, file_name,
+                 joint_dim, use_image=False,
+                 coords_dim=6, onehot_dim=4,
+                 image_size=(128, 128), traj_indices=None,
+                 crop_params=None):
+        """
+        Args:
+            ds_root_dir: Root directory containing data files and images
+            file_name: Name of the .npy data file
+            joint_dim: Number of joints (7)
+            use_image: If True, use image at step 0 as target representation
+            coords_dim: Dimension of coordinates (6 for x,y of 3 objects)
+            onehot_dim: Dimension of one-hot touch history (4)
+            image_size: Resize images to this size after cropping
+            traj_indices: Array mapping dataset trajectory index to original
+                         trajectory folder number. If None, assumes 1:1 mapping.
+            crop_params: Dict with 'top', 'left', 'height', 'width' for cropping
+        """
         self.joint_dim = joint_dim
         self.state_dim = 2 * joint_dim
-        self.target_dim = target_dim
+        self.coords_dim = coords_dim
+        self.onehot_dim = onehot_dim
+        self.target_dim = coords_dim + onehot_dim
         self.ds_root_dir = ds_root_dir
         self.use_image = use_image
 
         data_file_path = os.path.join(ds_root_dir, file_name)
-        self.trajectories = np.load(data_file_path)#[0:4]
+        self.trajectories = np.load(data_file_path)
         print("loaded data from", data_file_path)
         print("trajectories.shape", self.trajectories.shape)
 
         self.num_trajectories_in_dataset = self.trajectories.shape[0]
         self.num_steps = self.trajectories.shape[1]
 
+        # Trajectory index mapping
+        if traj_indices is not None:
+            self.traj_indices = traj_indices
+            print(f"Using trajectory mapping: {len(traj_indices)} trajectories")
+            print(f"First 5 original traj indices: {traj_indices[:5]}")
+        else:
+            self.traj_indices = np.arange(self.num_trajectories_in_dataset)
+
         if self.use_image:
-            self.transform = transforms.Compose([
-                # transforms.Resize([108, 171]),
-                # transforms.RandomHorizontalFlip(), # Flip the data horizontally
+            # Build transform with optional cropping
+            transform_list = []
+            if crop_params is not None:
+                transform_list.append(
+                    transforms.Lambda(lambda img: transforms.functional.crop(
+                        img,
+                        top=crop_params['top'],
+                        left=crop_params['left'],
+                        height=crop_params['height'],
+                        width=crop_params['width']
+                    ))
+                )
+            transform_list.extend([
+                transforms.Resize(image_size),
                 transforms.ToTensor(),
-                # transforms.Normalize(mean=(0.5,0.5,0.5), std=(0.5,0.5,0.5))
             ])
+            self.transform = transforms.Compose(transform_list)
+            self.img_dir = os.path.join(ds_root_dir, "triangle_images_fixed_cam")
 
     def __len__(self):
-        return self.num_trajectories_in_dataset*self.num_steps
+        return self.num_trajectories_in_dataset * self.num_steps
 
     def __getitem__(self, idx):
         traj_no = idx // self.num_steps
@@ -68,20 +106,29 @@ class TrajectoryDataset(Dataset):
         action = self.trajectories[traj_no, step_no, -self.joint_dim:]
 
         if self.use_image:
-            img_path = os.path.join(self.ds_root_dir,
-                                    f"scenes_cropped/eps_{traj_no}/crpd_step_{step_no}.png")
-            image = Image.open(img_path)
-            # image = read_image(img_path)
-            image = self.transform(image)
-            target_repr = image
+            # Get original trajectory folder number
+            original_traj_no = self.traj_indices[traj_no]
+
+            # Load target image at step 0 (front camera)
+            img_path = os.path.join(
+                self.img_dir,
+                f"traj_{original_traj_no:03d}/step_000.jpg")
+            target_image = Image.open(img_path).convert('RGB')
+            target_image = self.transform(target_image)
+
+            # Touch history (one-hot, 4 dims)
+            onehot_start = 1 + self.state_dim + self.coords_dim
+            onehot_end = onehot_start + self.onehot_dim
+            touch_history = self.trajectories[traj_no, step_no, onehot_start:onehot_end]
+
+            return step, state, target_image, touch_history, action
         else:
             target_start_idx = 1 + self.state_dim
             target_end_idx = target_start_idx + self.target_dim
-            target_repr = self.trajectories[traj_no, step_no, 
+            target_repr = self.trajectories[traj_no, step_no,
                                            target_start_idx:target_end_idx]
-            target_repr = target_repr
 
-        return step, state, target_repr, action
+            return step, state, target_repr, action
 
 
 class TwoStreamDataset(Dataset):
@@ -239,7 +286,7 @@ def log_loss(n, val_loss_cutsom, val_loss_torques):
 def run_test(n):
     global val_dataloader, model, criterion, weights_storage_root_dir
     global val_losses_custom, val_losses_torques
-    global use_custom_loss, use_baseline, use_two_stream
+    global use_custom_loss, use_baseline, use_two_stream, use_image
     global train_info
 
     val_loss_cutsom = 0
@@ -253,6 +300,10 @@ def run_test(n):
             batch_images_front = batch_data[3].to(device).float()
             batch_images_side = batch_data[4].to(device).float()
             batch_action = batch_data[5].to(device).float()
+        elif use_image:
+            # use_image=True: (step, state, target_image, touch_history, action)
+            batch_touch_history = batch_data[3].to(device).float()
+            batch_action = batch_data[4].to(device).float()
         else:
             batch_action = batch_data[3].to(device).float()
 
@@ -260,18 +311,19 @@ def run_test(n):
         with torch.no_grad():
             if use_two_stream:
                 batch_action_pred = model(batch_target_repr, batch_images_front, batch_images_side)
+            elif use_image:
+                # target_repr is image, pass touch_history
+                batch_action_pred, batch_x_des, batch_diff = model(
+                    batch_target_repr, batch_state, batch_touch_history)
             elif use_baseline:
                 nn_input = torch.cat((batch_target_repr, batch_state), dim=1)
                 batch_action_pred = model(nn_input)
             else:
                 batch_action_pred, batch_x_des, batch_diff = model(batch_target_repr,
                                                                    batch_state)
-            
+
         if use_custom_loss:
-            # loss_custom, loss_torques = criterion(batch_action_pred, batch_action, 
-            #                                     batch_x_des, batch_state, 
-            #                                     batch_step)
-            loss_custom, loss_torques = criterion(batch_action_pred, batch_action, 
+            loss_custom, loss_torques = criterion(batch_action_pred, batch_action,
                                                 batch_x_des, batch_state)
         else:
             loss_torques = criterion(batch_action_pred, batch_action)
@@ -400,15 +452,23 @@ action_dim = joints_num
 
 # Training:
 use_baseline = False
-use_image = False
-use_two_stream = True
+use_image = True  # Set to True to use image at t=0 as target representation
+use_two_stream = False
 use_custom_loss = config.use_custom_loss
-num_epochs = 12000 + 1 
+num_epochs = 12000 + 1
 batch_size = 256
 learning_rate = 3e-4
 validation_interval = 100
 num_trains = 3
-noise_std = 0.004
+noise_std = 0.1 #0.004
+
+# Crop parameters for image preprocessing
+crop_params = {
+    'top': 210,
+    'left': 220,
+    'height': 150,
+    'width': 200,
+}
 
 if use_baseline or use_two_stream:
     use_custom_loss = False
@@ -420,6 +480,8 @@ for i in range(7):
 
 for model_complexity in ['high']: #'low', 'medium', 'high', 'xhigh']:
     enc_hid, cont_hid, lin_hid, lin_out = config.get_model_dims(model_complexity)
+    if use_image:
+        cnn_latent, cont_hid = config.get_image_model_dims(model_complexity)
     
     for i_train in range(num_trains):
         fig_1 = plt.figure(figsize=(12.8, 9.6))
@@ -441,13 +503,29 @@ for model_complexity in ['high']: #'low', 'medium', 'high', 'xhigh']:
                                        num_history_images=config.num_history_images,
                                        image_size=config.image_size,
                                        traj_indices=train_traj_indices)
+        elif use_image:
+            # Load trajectory mapping from .npz file
+            mapping_file = os.path.join(ds_root_dir, f'traj_mapping_{config.ds_ratio}.npz')
+            mapping = np.load(mapping_file)
+            train_traj_indices = mapping['train_traj_indices']
+            print(f"Loaded trajectory mapping with {len(train_traj_indices)} trajectories")
+            print(f"First five indices are:", train_traj_indices[:5])
+
+            dataset = TrajectoryDataset(ds_root_dir, ds_file_name,
+                                        joints_num, use_image=True,
+                                        coords_dim=config.coords_dim,
+                                        onehot_dim=config.onehot_dim,
+                                        image_size=config.image_size,
+                                        traj_indices=train_traj_indices,
+                                        crop_params=crop_params)
         else:
             dataset = TrajectoryDataset(ds_root_dir, ds_file_name,
-                                        joints_num, target_dim, use_image)
-        if use_two_stream:
+                                        joints_num, use_image=False,
+                                        coords_dim=config.coords_dim,
+                                        onehot_dim=config.onehot_dim)
+        if use_two_stream or use_image:
             train_set, val_set = torch.utils.data.random_split(dataset, [0.9, 0.1])
         else:
-            # train_set, val_set = torch.utils.data.random_split(dataset, [0.9, 0.1])
             split_file_path = os.path.join(ds_root_dir, config.train_val_file)
             split = torch.load(split_file_path)
             train_indices = split['train_indices']
@@ -477,9 +555,11 @@ for model_complexity in ['high']: #'low', 'medium', 'high', 'xhigh']:
                                 lin_hid=lin_hid, lin_out=lin_out,
                                 out_dim=action_dim)
         else:
+            # GeneralModel with use_image=True uses CNN encoder + touch_history
             model = GeneralModel(encoded_space_dim=encoded_space_dim, target_dim=target_dim,
                                  enc_hid=enc_hid, cont_hid=cont_hid,
-                                 action_dim=action_dim, use_image=use_image)
+                                 action_dim=action_dim, use_image=use_image,
+                                 cnn_latent=cnn_latent, onehot_dim=config.onehot_dim)
         m = model.to(device)
         num_params = sum(p.numel() for p in m.parameters())/1e3
         model_name += f"|{num_params}K_params"
@@ -552,32 +632,35 @@ for model_complexity in ['high']: #'low', 'medium', 'high', 'xhigh']:
                     batch_images_front = batch_data[3].to(device).float()
                     batch_images_side = batch_data[4].to(device).float()
                     batch_action = batch_data[5].to(device).float()
-                    # # Visualize sample images on first batch of first epoch
-                    # if n == 0 and i == 0:
-                    #     print(f"Image tensor shape: {batch_images_front.shape}")  # Should be (B, 9, 128, 128)
-                    #     vis_path = os.path.join(weights_storage_root_dir, "sample_images.png")
-                    #     visualize_image_stack(batch_images_front, batch_images_side, vis_path)
+                elif use_image:
+                    # use_image=True: (step, state, target_image, touch_history, action)
+                    batch_touch_history = batch_data[3].to(device).float()
+                    batch_action = batch_data[4].to(device).float()
                 else:
                     batch_action = batch_data[3].to(device).float()
 
-                batch_noise = torch.normal(mean=0.0, std=noise_std, #std=0.001
+                batch_noise = torch.normal(mean=0.0, std=noise_std,
                                         size=(batch_state.size()[0], encoded_space_dim)
                                         ).to(device).float()
-                batch_state_noise = batch_state + batch_noise
+                batch_state_noise = batch_state + batch_noise #AMZ
 
                 optimizer.zero_grad()
                 if use_two_stream:
                     batch_action_pred_noise = model(batch_target_repr, batch_images_front, batch_images_side)
                     batch_action_noise = batch_action
+                elif use_image:
+                    # target_repr is image, pass touch_history
+                    batch_action_pred_noise, batch_x_des_noise, batch_diff_noise = model(
+                        batch_target_repr, batch_state_noise, batch_touch_history)
+                    batch_action_noise = batch_action #- batch_noise[:, :joints_num] #AMZ
                 elif use_baseline:
                     nn_input = torch.cat((batch_target_repr, batch_state_noise), dim=1)
                     batch_action_pred_noise = model(nn_input)
-                    batch_action_noise = batch_action - batch_noise[:, :joints_num]
+                    batch_action_noise = batch_action #- batch_noise[:, :joints_num]
                 else:
-                    batch_action_pred_noise , batch_x_des_noise, \
-                        batch_diff_noise  = model(batch_target_repr, batch_state_noise)
-                    # TODO: Think about it.
-                    batch_action_noise = batch_action - batch_noise[:, :joints_num]
+                    batch_action_pred_noise, batch_x_des_noise, \
+                        batch_diff_noise = model(batch_target_repr, batch_state_noise)
+                    batch_action_noise = batch_action #- batch_noise[:, :joints_num]
 
                 if use_custom_loss:
                     # loss_custom, loss_torques = criterion(batch_action_pred_noise, batch_action_noise, 

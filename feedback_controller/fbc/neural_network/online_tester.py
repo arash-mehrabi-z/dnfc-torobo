@@ -27,10 +27,20 @@ from dtw import *
 plt.switch_backend('agg')
 
 comm = Comm()
-device = 'cpu'  # Force CPU to avoid CUDA library conflicts; change back to 'cuda' once resolved
+device = 'cpu' #'cuda' if torch.cuda.is_available() else 'cpu'
 cur_file_dir_path = os.path.dirname(__file__)
 config = Config()
 bridge = CvBridge()
+
+# Load normalization parameters
+norm_params_path = os.path.join(
+    cur_file_dir_path,
+    'data/torobo/trajs:360_blocks:3_imgs_2cams/normalization_params.npz'
+)
+norm_params = np.load(norm_params_path)
+xy_mean = norm_params['xy_mean'].flatten()  # (6,) - x,y for 3 objects
+xy_std = norm_params['xy_std'].flatten()    # (6,)
+action_std = torch.tensor(norm_params['action_std'].flatten()).to(device).float()  # (7,)
 
 
 class ImageBuffer:
@@ -99,8 +109,100 @@ class ImageBuffer:
         return image_stack.unsqueeze(0).to(device).float()  # (1, num_images * 3, H, W)
 
 
-# Global image buffer (initialized when needed)
-image_buffer = None
+# Global image buffers (initialized when needed)
+image_buffer_front = None
+image_buffer_side = None
+
+# Crop parameters for image preprocessing (must match training)
+CROP_PARAMS = {
+    'top': 210,
+    'left': 220,
+    'height': 150,
+    'width': 200,
+}
+
+
+class TargetImageCapture:
+    """Capture a single image at t=0 as the target representation."""
+    def __init__(self, image_size=(128, 128), crop_params=None,
+                 image_topic='/camera/color/image_raw'):
+        self.image_size = image_size
+        self.crop_params = crop_params
+        self.captured_image = None
+        self.lock = Lock()
+
+        # Build transform with optional cropping
+        transform_list = []
+        if crop_params is not None:
+            transform_list.append(
+                transforms.Lambda(lambda img: transforms.functional.crop(
+                    img,
+                    top=crop_params['top'],
+                    left=crop_params['left'],
+                    height=crop_params['height'],
+                    width=crop_params['width']
+                ))
+            )
+        transform_list.extend([
+            transforms.Resize(image_size),
+            transforms.ToTensor(),
+        ])
+        self.transform = transforms.Compose(transform_list)
+
+        # Subscribe to camera topic
+        self.image_sub = rospy.Subscriber(
+            image_topic, ROSImage, self.image_callback, queue_size=1)
+        print(f"TargetImageCapture subscribed to: {image_topic}")
+
+    def image_callback(self, msg):
+        """Callback for incoming images - only captures first image."""
+        if self.captured_image is not None:
+            return  # Already captured
+
+        try:
+            img_data = np.frombuffer(msg.data, dtype=np.uint8)
+
+            if msg.encoding == 'rgb8':
+                img_array = img_data.reshape((msg.height, msg.width, 3))
+            elif msg.encoding == 'bgr8':
+                img_array = img_data.reshape((msg.height, msg.width, 3))
+                img_array = img_array[:, :, ::-1]  # BGR to RGB
+            elif msg.encoding == 'rgba8':
+                img_array = img_data.reshape((msg.height, msg.width, 4))[:, :, :3]
+            elif msg.encoding == 'bgra8':
+                img_array = img_data.reshape((msg.height, msg.width, 4))[:, :, :3]
+                img_array = img_array[:, :, ::-1]
+            else:
+                rospy.logwarn(f"Unsupported image encoding: {msg.encoding}")
+                return
+
+            pil_image = Image.fromarray(img_array.copy())
+
+            with self.lock:
+                self.captured_image = pil_image
+                print("Target image captured at t=0")
+        except Exception as e:
+            rospy.logwarn(f"Error capturing target image: {e}")
+
+    def get_target_image(self):
+        """Get the captured target image as a tensor."""
+        with self.lock:
+            if self.captured_image is None:
+                return None
+            image_tensor = self.transform(self.captured_image)
+            return image_tensor.unsqueeze(0).to(device).float()  # (1, 3, H, W)
+
+    def reset(self):
+        """Reset to capture a new target image."""
+        with self.lock:
+            self.captured_image = None
+
+    def save_target_image(self, path):
+        """Save the captured target image for debugging."""
+        with self.lock:
+            if self.captured_image is not None:
+                self.captured_image.save(path)
+                print(f"Target image saved to: {path}")
 
 
 def online_test(tester:Tester, eps_num, use_baseline):
@@ -122,9 +224,11 @@ def online_test(tester:Tester, eps_num, use_baseline):
     goal = elem[0][step_size+state_size : 
                    step_size+state_size+target_size].tolist()
     
-    obstA = torch.tensor(goal[0:3])
-    obstB = torch.tensor(goal[3:6])
-    obstC = torch.tensor(goal[6:9])
+    # 6D coordinates: x,y for 3 objects (z is fixed at 0.865)
+    z_fixed = 0.865
+    obstA = torch.tensor([goal[0], goal[1], z_fixed])
+    obstB = torch.tensor([goal[2], goal[3], z_fixed])
+    obstC = torch.tensor([goal[4], goal[5], z_fixed])
     grepB = [obstB[0], obstB[1], 0.87]
     putB = [obstA[0], obstA[1], 0.9]
     grepC = [obstC[0], obstC[1], 0.87]
@@ -213,8 +317,152 @@ def online_test(tester:Tester, eps_num, use_baseline):
     return all_joints, traj_point, latent_reps, all_states #all_trajs_point
 
 
+def online_test_image(tester: Tester, eps_num, target_image_capture,
+                      results_dir=None, save_every_n_steps=10):
+    """Online test using GeneralModel with use_image=True.
+
+    Uses a single target image captured at t=0 and current robot state.
+
+    Args:
+        tester: Tester instance with model loaded
+        eps_num: Episode number
+        target_image_capture: TargetImageCapture instance
+        results_dir: Directory to save images (optional)
+        save_every_n_steps: Save image every N steps (default: 10)
+    """
+    joint_size = tester.joint_size
+    state_size = tester.state_size
+    step_size = tester.step_size
+    target_size = tester.target_size
+    onehot_size = tester.onehot_size
+    traj_step_size = 900
+
+    elem = tester.dataset[eps_num]
+    state = torch.tensor(elem[0][step_size:
+                                 step_size + state_size].tolist()
+                         ).to(device).float()
+
+    one_hot = elem[0][step_size + state_size + target_size:
+                      step_size + state_size + target_size + onehot_size].tolist()
+    # goal contains NORMALIZED coordinates from the preprocessed dataset
+    goal_normalized = elem[0][step_size + state_size:
+                              step_size + state_size + target_size].tolist()
+
+    # Denormalize coordinates for physical object positioning
+    goal_real = (np.array(goal_normalized) * xy_std) + xy_mean
+
+    # 6D coordinates: x,y for 3 objects (z is fixed at 0.865)
+    z_fixed = 0.865
+    obstA = torch.tensor([goal_real[0], goal_real[1], z_fixed])
+    obstB = torch.tensor([goal_real[2], goal_real[3], z_fixed])
+    obstC = torch.tensor([goal_real[4], goal_real[5], z_fixed])
+    grepB = [obstB[0], obstB[1], 0.87]
+    putB = [obstA[0], obstA[1], 0.9]
+    grepC = [obstC[0], obstC[1], 0.87]
+    putC = [obstA[0], obstA[1], 0.93]
+
+    print("Points")
+    print(obstA)
+    print(obstB)
+    print(obstC)
+
+    comm.move('point1', obstA)
+    comm.move('point2', obstB)
+    comm.move('point3', obstC)
+    comm.create_and_pub_msg(state[:7])
+    rospy.sleep(5)
+
+    # Reset and capture new target image at t=0
+    target_image_capture.reset()
+    print("Waiting for target image capture...")
+    while target_image_capture.get_target_image() is None:
+        rospy.sleep(0.1)
+    print("Target image captured, starting test...")
+
+    # Save target image for debugging
+    if results_dir is not None:
+        images_dir = os.path.join(results_dir, f"images_eps_{eps_num}")
+        if not os.path.exists(images_dir):
+            os.makedirs(images_dir)
+        target_image_capture.save_target_image(
+            os.path.join(images_dir, "target_image_t0.jpg"))
+
+    traj_point = 0
+    all_joints = []
+    latent_reps = []
+    all_states = []
+
+    tester.model.eval()
+
+    for i in range(traj_step_size):
+        comm.which('\n image_model on step' + str(i) + '\n')
+
+        # Get target image (captured at t=0, stays constant)
+        target_image = target_image_capture.get_target_image()
+        if target_image is None:
+            rospy.logwarn("Target image not available, skipping step")
+            continue
+
+        # Prepare robot state and touch history
+        state_nn = torch.unsqueeze(state, 0).float()
+        touch_history = torch.tensor([one_hot]).to(device).float()
+
+        with torch.no_grad():
+            velocities_tensor, x_des, _ = tester.model(
+                target_image, state_nn, touch_history)
+
+        x_des_squeezed = torch.squeeze(x_des, 0)
+        latent_reps.append(x_des_squeezed.tolist())
+
+        velocities_tensor = torch.squeeze(velocities_tensor, 0)
+        # Denormalize actions if needed
+        velocities_tensor = velocities_tensor * action_std
+        state[:7] += (5 * velocities_tensor)
+
+        comm.create_and_pub_msg(state[:7])
+        rospy.sleep(0.05)
+        comm.jsLock.acquire()
+        js = torch.tensor((list(comm.joint_state))).to(device).float()
+        comm.jsLock.release()
+
+        state = torch.cat((js, velocities_tensor), dim=0).to(device)
+        all_joints.append(state[:7])
+        all_states.append(state.tolist())
+
+        pos = tester.get_end_eff(js.tolist())
+        if one_hot[0] == 1:
+            pos[2] -= 0.02
+            comm.move('point2', pos)
+        elif one_hot[2] == 1:
+            pos[2] -= 0.02
+            comm.move('point3', pos)
+
+        if traj_point == 0 and tester.close_enough(state, grepB):
+            traj_point = 1
+            one_hot = [1, 0, 0, 0]
+            print('here1')
+            print(i)
+        elif traj_point == 1 and tester.close_enough(state, putB):
+            traj_point = 2
+            one_hot = [0, 1, 0, 0]
+            print('here2')
+            print(i)
+        elif traj_point == 2 and tester.close_enough(state, grepC):
+            traj_point = 3
+            one_hot = [0, 0, 1, 0]
+            print('here3')
+            print(i)
+        elif traj_point == 3 and tester.close_enough(state, putC):
+            traj_point = 4
+            one_hot = [0, 0, 0, 1]
+            print('here4')
+            print(i)
+
+    return all_joints, traj_point, latent_reps, all_states
+
+
 def online_test_two_stream(tester: Tester, eps_num, results_dir=None, save_every_n_steps=10):
-    """Online test using TwoStreamBaseline with image input.
+    """Online test using TwoStreamBaseline with image input from two cameras.
 
     Args:
         tester: Tester instance
@@ -222,7 +470,7 @@ def online_test_two_stream(tester: Tester, eps_num, results_dir=None, save_every
         results_dir: Directory to save images (optional)
         save_every_n_steps: Save image every N steps (default: 10)
     """
-    global image_buffer
+    global image_buffer_front, image_buffer_side
 
     joint_size = tester.joint_size
     state_size = tester.state_size
@@ -238,12 +486,18 @@ def online_test_two_stream(tester: Tester, eps_num, results_dir=None, save_every
 
     one_hot = elem[0][step_size + state_size + target_size:
                       step_size + state_size + target_size + onehot_size].tolist()
-    goal = elem[0][step_size + state_size:
-                   step_size + state_size + target_size].tolist()
+    # goal contains NORMALIZED coordinates from the preprocessed dataset
+    goal_normalized = elem[0][step_size + state_size:
+                              step_size + state_size + target_size].tolist()
 
-    obstA = torch.tensor(goal[0:3])
-    obstB = torch.tensor(goal[3:6])
-    obstC = torch.tensor(goal[6:9])
+    # Denormalize coordinates for physical object positioning: real = normalized * std + mean
+    goal_real = (np.array(goal_normalized) * xy_std) + xy_mean
+
+    # 6D coordinates: x,y for 3 objects (z is fixed at 0.865)
+    z_fixed = 0.865
+    obstA = torch.tensor([goal_real[0], goal_real[1], z_fixed])
+    obstB = torch.tensor([goal_real[2], goal_real[3], z_fixed])
+    obstC = torch.tensor([goal_real[4], goal_real[5], z_fixed])
     grepB = [obstB[0], obstB[1], 0.87]
     putB = [obstA[0], obstA[1], 0.9]
     grepC = [obstC[0], obstC[1], 0.87]
@@ -272,43 +526,51 @@ def online_test_two_stream(tester: Tester, eps_num, results_dir=None, save_every
             os.makedirs(images_dir)
         print(f"Saving images to: {images_dir}")
 
-    # Ensure image buffer is initialized
-    if image_buffer is None:
-        raise RuntimeError("Image buffer not initialized. Call init_image_buffer() first.")
+    # Ensure image buffers are initialized
+    if image_buffer_front is None or image_buffer_side is None:
+        raise RuntimeError("Image buffers not initialized. Call init_image_buffers() first.")
 
-    # Wait for images to be available
-    print("Waiting for images...")
-    while image_buffer.get_image_stack() is None:
+    # Wait for images to be available from both cameras
+    print("Waiting for images from both cameras...")
+    while image_buffer_front.get_image_stack() is None or image_buffer_side.get_image_stack() is None:
         rospy.sleep(0.1)
-    print("Images available, starting test...")
+    print("Images available from both cameras, starting test...")
 
     tester.two_stream_model.eval()
 
     for i in range(traj_step_size):
         comm.which('\n two_stream in on step' + str(i) + '\n')
 
-        goal_tensor = torch.tensor(goal + one_hot).to(device).float()
+        # goal_normalized is already normalized from the preprocessed dataset
+        goal_tensor = torch.tensor(goal_normalized + one_hot).to(device).float()
         goal_nn = torch.unsqueeze(goal_tensor, 0)
 
-        # Get current image stack
-        image_stack = image_buffer.get_image_stack()
-        if image_stack is None:
-            rospy.logwarn("No images available, using previous action")
+        # Get current image stacks from both cameras
+        image_stack_front = image_buffer_front.get_image_stack()
+        image_stack_side = image_buffer_side.get_image_stack()
+        if image_stack_front is None or image_stack_side is None:
+            rospy.logwarn("No images available from one or both cameras, skipping step")
             continue
 
-        # Save image periodically for debugging
+        # Save images periodically for debugging
         if images_dir is not None and i % save_every_n_steps == 0:
-            with image_buffer.lock:
-                if len(image_buffer.images) > 0:
-                    # Save the most recent image
-                    img_to_save = image_buffer.images[-1]
-                    img_path = os.path.join(images_dir, f"step_{i:04d}.jpg")
+            with image_buffer_front.lock:
+                if len(image_buffer_front.images) > 0:
+                    img_to_save = image_buffer_front.images[-1]
+                    img_path = os.path.join(images_dir, f"step_{i:04d}_front.jpg")
+                    img_to_save.save(img_path)
+            with image_buffer_side.lock:
+                if len(image_buffer_side.images) > 0:
+                    img_to_save = image_buffer_side.images[-1]
+                    img_path = os.path.join(images_dir, f"step_{i:04d}_side.jpg")
                     img_to_save.save(img_path)
 
         with torch.no_grad():
-            velocities_tensor = tester.two_stream_model(goal_nn, image_stack)
+            velocities_tensor = tester.two_stream_model(goal_nn, image_stack_front, image_stack_side)
 
         velocities_tensor = torch.squeeze(velocities_tensor, 0)
+        # Denormalize actions: action_real = action_predicted * action_std
+        velocities_tensor = velocities_tensor * action_std
         state[:7] += (5 * velocities_tensor)
 
         comm.create_and_pub_msg(state[:7])
@@ -353,15 +615,36 @@ def online_test_two_stream(tester: Tester, eps_num, results_dir=None, save_every
     return all_joints, traj_point, all_states
 
 
-def init_image_buffer(image_topic='/camera/color/image_raw'):
-    """Initialize the global image buffer."""
-    global image_buffer
-    image_buffer = ImageBuffer(
+def init_image_buffers(image_topic_front='/camera/color/image_raw',
+                       image_topic_side='/camera_side/color/image_raw'):
+    """Initialize the global image buffers for both cameras."""
+    global image_buffer_front, image_buffer_side
+    image_buffer_front = ImageBuffer(
         num_history_images=config.num_history_images,
         image_size=config.image_size,
+        image_topic=image_topic_front
+    )
+    image_buffer_side = ImageBuffer(
+        num_history_images=config.num_history_images,
+        image_size=config.image_size,
+        image_topic=image_topic_side
+    )
+    return image_buffer_front, image_buffer_side
+
+
+# Global target image capture (initialized when needed)
+target_image_capture = None
+
+
+def init_target_image_capture(image_topic='/camera/color/image_raw'):
+    """Initialize target image capture for GeneralModel with use_image=True."""
+    global target_image_capture
+    target_image_capture = TargetImageCapture(
+        image_size=config.image_size,
+        crop_params=CROP_PARAMS,
         image_topic=image_topic
     )
-    return image_buffer
+    return target_image_capture
 
 
 def setup_camera_view(torso_tilt=0.26, gaze_target=None):
@@ -618,24 +901,90 @@ tester = Tester()
 kin = TorKin()
 
 use_only_dnfc = False
-use_two_stream = True  # Set to True to use TwoStreamBaseline with images
-epoch_no = 3000 #4000
+use_two_stream = False  # Set to True to use TwoStreamBaseline with images
+use_image = True  # Set to True to use GeneralModel with image at t=0 as target
+epoch_no = 8800 #4000
 train_num = 1
-image_topic = '/head/camera/color/image_raw'  # Head camera (used during data collection)
+# Camera topics for front and side cameras
+image_topic_front = '/fixed_camera/image_raw'  # Front camera (head camera)
+image_topic_side = '/side_camera/image_raw'   # Side camera (adjust topic name as needed)
 
-if use_two_stream:
+if use_image:
+    # Initialize ROS node first for image subscription
+    rospy.init_node('image_model_tester')
+
+    # Initialize target image capture for front camera
+    init_target_image_capture(image_topic_front)
+    rospy.sleep(2)  # Wait for subscriber to connect
+
+    for model_complexity in ['high']:
+        tester.load_model(0, epoch_no, config.use_custom_loss, model_complexity,
+                          use_image=True)
+        params_num = tester.config.get_params_num(tester.model)
+
+        results_file = f'results/{config.dataset_name}_{params_num}K_{config.ds_ratio}'
+        results_file += f'/ep:{epoch_no}/image_model_{config.v_name}'
+        results_dir = os.path.join(cur_file_dir_path, results_file)
+        if os.path.exists(results_dir):
+            raise Exception(f"Result dir. exists. Are you testing again? Result dir: {results_dir}")
+        else:
+            os.makedirs(results_dir)
+        print("results_dir", results_dir)
+
+        perf_file_path = os.path.join(results_dir, "perf.csv")
+        with open(perf_file_path, 'w') as f:
+            writer = csv.writer(f)
+            row = ["eps_num", "image_model_succ", "image_model_dtw", "image_model_norm"]
+            writer.writerow(row)
+
+        all_states_image_model = []
+        all_latent_reps = []
+        for eps_num in range(len(tester.dataset)):
+            for i_train in range(train_num):
+                tester.load_model(i_train, epoch_no, config.use_custom_loss,
+                                  model_complexity, use_image=True)
+                print(f'Testing ImageModel on episode {eps_num}, train {i_train}')
+                comm.which(f'\n\n\n\nimage_model start on path {eps_num}\n\n\n\n')
+
+                all_joints_img, loss_img, latent_reps, states_img = online_test_image(
+                    tester, eps_num, target_image_capture,
+                    results_dir=results_dir, save_every_n_steps=10)
+
+                coords_img = intrinsic_to_3d_cart(all_joints_img)
+                coords_gtruth = tester.get_real_coordinates(eps_num)
+
+                # Calculate DTW metric
+                alignment_img = dtw(np.array(list(zip(*coords_img))),
+                                    np.array(list(zip(*coords_gtruth))))
+                dtw_img = alignment_img.distance
+                dtw_norm_img = alignment_img.normalizedDistance
+
+                img_succ = loss_img / 4
+                print(f"ImageModel perf. {img_succ}, DTW: {dtw_img}")
+
+                with open(perf_file_path, 'a') as f:
+                    writer = csv.writer(f)
+                    writer.writerow([eps_num, img_succ, dtw_img, dtw_norm_img])
+
+                all_states_image_model.append(states_img)
+                all_latent_reps.append(latent_reps)
+
+        save_list_to_file(all_states_image_model, results_dir, "all_states_image_model")
+        save_list_to_file(all_latent_reps, results_dir, "all_latent_reps")
+
+elif use_two_stream:
     # Initialize ROS node first for image subscription
     rospy.init_node('two_stream_tester')
 
-    # Setup camera view (tilt torso and point head at workspace)
-    # Adjust these values to match your data collection setup
-    torso_tilt = 0.26  # radians (~15 degrees)
-    # gaze_target matches data_collector_triangle: center_x=0.475, center_y=-0.105
-    gaze_target = np.array([0.475, -0.105, 0.865])
-    setup_camera_view(torso_tilt=torso_tilt, gaze_target=gaze_target)
+    # # Setup camera view (tilt torso and point head at workspace)
+    # # Adjust these values to match your data collection setup
+    # torso_tilt = 0.26  # radians (~15 degrees)
+    # # gaze_target matches data_collector_triangle: center_x=0.475, center_y=-0.105
+    # gaze_target = np.array([0.475, -0.105, 0.865])
+    # setup_camera_view(torso_tilt=torso_tilt, gaze_target=gaze_target)
 
-    init_image_buffer(image_topic)
-    rospy.sleep(2)  # Wait for image buffer to fill
+    init_image_buffers(image_topic_front, image_topic_side)
+    rospy.sleep(2)  # Wait for image buffers to fill
 
     for model_complexity in ['high']:  # TwoStream typically uses 'high'
         tester.load_two_stream_model(0, epoch_no, model_complexity)

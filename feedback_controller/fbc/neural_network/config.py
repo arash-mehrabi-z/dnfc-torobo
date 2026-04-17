@@ -5,7 +5,7 @@ class Config:
         self.num_steps = 299
         self.C = 1e-5
 
-        self.v_name = "img_enc" #"2+2l_lat:sub-nvel" #"6l_linear" #"v_custl_mse"
+        self.v_name = "img_task_enc" #"2+2l_lat:sub-nvel" #"6l_linear" #"v_custl_mse"
         self.v_name_base = "3l_base" #"4l_base"
         self.v_name_two_stream = "two_stream_two_encs_combine_latent_base"
         self.num_history_images = 3
@@ -38,7 +38,7 @@ class Config:
             # model_name = f"cus_los_const_mse_st"
         else: model_name = "mse_los"
         if use_two_stream: model_name += "|tar_cart+img"
-        elif use_image: model_name += "|tar_img"
+        elif use_image: model_name += "|tar_img_static"
         else: model_name += "|tar_cart"
         if use_two_stream: model_name += f"|{self.v_name_two_stream}"
         elif use_baseline: model_name += f"|base|{self.v_name_base}"
@@ -123,3 +123,22 @@ class Config:
             raise Exception("Model complexity is not defined.")
 
         return mlp_hidden_1, mlp_hidden_2, mlp_latent, cnn_latent, decoder_hidden_1, decoder_hidden_2
+
+    def get_image_model_dims(self, model_complexity):
+        """Get dimensions for GeneralModel with use_image=True."""
+        if model_complexity == 'low':
+            cnn_latent = 64
+            cont_hid = 192
+        elif model_complexity == 'medium':
+            cnn_latent = 128
+            cont_hid = 384
+        elif model_complexity == 'high':
+            cnn_latent = 128
+            cont_hid = 768
+        elif model_complexity == 'xhigh':
+            cnn_latent = 256
+            cont_hid = 1536
+        else:
+            raise Exception("Model complexity is not defined.")
+
+        return cnn_latent, cont_hid

@@ -451,13 +451,20 @@ class UserComm():
         self.udpserverTh.start()        # sets up the udpserver listener and fires the thread
         self.deniz_pub = rospy.Publisher("/gazebo/set_model_state", ModelState, queue_size=3)
 
-        # Camera subscriber for capturing Torobo eye images
+        # Camera subscriber for capturing images
         self.cvbridge = CvBridge()
+        # Fixed overhead camera
         self.current_image = None
         self.image_lock = Lock()
         # Use CAM_TOPIC_HW = '/torobo/head/camera/color/image_raw' for hardware
-        CAM_TOPIC_SIM = '/head/camera/color/image_raw'
+        # Use '/head/camera/color/image_raw' for Torobo eye camera in simulation
+        CAM_TOPIC_SIM = '/fixed_camera/image_raw'  # Fixed overhead camera in Gazebo
         rospy.Subscriber(CAM_TOPIC_SIM, Image, self.image_callback, queue_size=1)
+        # Side camera
+        self.current_image_side = None
+        self.image_lock_side = Lock()
+        CAM_TOPIC_SIDE = '/side_camera/image_raw'  # Fixed side camera in Gazebo
+        rospy.Subscriber(CAM_TOPIC_SIDE, Image, self.image_callback_side, queue_size=1)
 
         if touchEXISTS:
             self.touch = touchComm(self, activate=True)
@@ -480,6 +487,23 @@ class UserComm():
         self.image_lock.acquire()
         img = self.current_image.copy() if self.current_image is not None else None
         self.image_lock.release()
+        return img
+
+    def image_callback_side(self, data):
+        """Callback for side camera image subscriber - stores the latest frame."""
+        try:
+            img = self.cvbridge.imgmsg_to_cv2(data, "bgr8")
+            self.image_lock_side.acquire()
+            self.current_image_side = img.copy()
+            self.image_lock_side.release()
+        except CvBridgeError as e:
+            print("CvBridge Error (side cam): ", e)
+
+    def get_current_image_side(self):
+        """Thread-safe method to get the current side camera image."""
+        self.image_lock_side.acquire()
+        img = self.current_image_side.copy() if self.current_image_side is not None else None
+        self.image_lock_side.release()
         return img
 
     # Used by UDPserver or ROS node callback
@@ -1245,52 +1269,55 @@ class UserComm():
         des_y = np.array([0., 1., 0.])
         des_x = np.cross(des_y,des_z)
         R_des = np.array([des_x, des_y, des_z]).T
-        center_x=0.425 + 0.05
-        center_y=-0.175 + 0.07
-        dist=0.07
+        center_x = 0.425 #+ 0.05
+        center_y = -0.175 #+ 0.07
+        dist = 0.07
 
-        start_point = [center_x, center_y, 1.2]
+        start_point = [center_x, center_y, 1.3]
 
         # Create base directory for saving images
         import os
-        image_base_dir = "/home/arash/catkin_ws/src/erhtor3_work/triangle_images"
+        image_base_dir = "/home/arash/catkin_ws/src/erhtor3_work/triangle_images_fixed_cam"
         if not os.path.exists(image_base_dir):
             os.makedirs(image_base_dir)
             print("Created image base directory: " + image_base_dir)
 
-        # Tilt torso forward to help camera see the table
-        torso_tilt = 0.26  # radians (~28 degrees), adjust as needed (max ~1.4 rad / 80 deg)
-        qtorso = self.jcomm.getjointpos(TOR._TORSO)
-        qtorso[1] = torso_tilt
-        self.request_setdesq(TOR._TORSO, qtorso)
-        self.kin.set_torso_for_ik(qtorso)  # Tell IK solver to use tilted torso
-        print("Tilting torso forward by {:.1f} degrees...".format(torso_tilt * 180.0 / np.pi))
-        time.sleep(2.0)  # Wait for torso to reach position
+        # # Tilt torso forward to help camera see the table
+        # torso_tilt = 0.26  # radians (~28 degrees), adjust as needed (max ~1.4 rad / 80 deg)
+        # qtorso = self.jcomm.getjointpos(TOR._TORSO)
+        # qtorso[1] = torso_tilt
+        # self.request_setdesq(TOR._TORSO, qtorso)
+        # self.kin.set_torso_for_ik(qtorso)  # Tell IK solver to use tilted torso
+        # print("Tilting torso forward by {:.1f} degrees...".format(torso_tilt * 180.0 / np.pi))
+        # time.sleep(2.0)  # Wait for torso to reach position
 
-        # Look at the center of the workspace and wait for head to move
-        gaze_target = np.array([center_x, center_y, 0.865])
-        self.lookat(gaze_target)
-        time.sleep(1.0)  # Wait for head to reach target position
+        # # Look at the center of the workspace and wait for head to move
+        # gaze_target = np.array([center_x, center_y, 0.865])
+        # self.lookat(gaze_target)
+        # time.sleep(1.0)  # Wait for head to reach target position
 
         # q, q9, q10 = self.request_q(TOR._RARM)
         # print("HI"*10)
         # print(qtorso)
         # print(q10)
 
-        obs=[]
-        den=0
-        alpha=0
+        obs = []
+        den = 0
+        alpha = 0
         while den < 360:
 
             curretn_obs=[]
-
-            # Create directory for this trajectory's images
+            # Create directory for this trajectory's images (overhead camera)
             traj_image_dir = os.path.join(image_base_dir, "traj_{:03d}".format(den))
             if not os.path.exists(traj_image_dir):
                 os.makedirs(traj_image_dir)
+            # Create directory for this trajectory's side camera images
+            traj_image_dir_side = os.path.join(image_base_dir, "traj_side_{:03d}".format(den))
+            if not os.path.exists(traj_image_dir_side):
+                os.makedirs(traj_image_dir_side)
 
-            # Ensure head is looking at the workspace center
-            self.lookat(gaze_target)
+            # # Ensure head is looking at the workspace center
+            # self.lookat(gaze_target)
 
             A_x,A_y,B_x,B_y,C_x,C_y=self.create_triang(center_x,center_y,dist,alpha)
             alpha+=1
@@ -1301,8 +1328,6 @@ class UserComm():
             C=[C_x, C_y, 0.865]
             ABC=[A,B,C]
             # recorder.ABC=ABC
-            
-            
 
             q_start, solved, errL, itused = self.kin.ik(1, np.array(start_point), R_des, maxit=1000, IKstep_show=0)
             # q_start = q
@@ -1312,67 +1337,75 @@ class UserComm():
             trajA_C=[[A_x, A_y,0.895],[A_x, A_y,1.1],[C_x, C_y, 1.1], [C_x, C_y, 0.865]]#10 POINTT
             trajC_A=[ [C_x, C_y, 0.865], [C_x, C_y, 1.1], [A_x, A_y,1.1], [A_x, A_y,0.925]]#10 POINT
             trajA_FINISH=[ [A_x, A_y,0.925], [A_x, A_y,1.1]]
-            # all_traj=[start_point, [B_x, B_y, 0.95],[B_x, B_y,0.87],[B_x, B_y,0.98], [A_x, A_y,0.98],[A_x, A_y,0.9],[A_x, A_y,1.05],[C_x, C_y, 0.95], [C_x, C_y, 0.87], [C_x, C_y, 1.1], [A_x, A_y,1.0], [A_x, A_y,0.93]]
-            all_traj=[start_point, [B_x, B_y, 0.95],[B_x, B_y,0.87],[B_x, B_y,0.98], [A_x, A_y,0.98],[A_x, A_y,0.885],[A_x, A_y,1.05],[C_x, C_y, 0.95], [C_x, C_y, 0.87], [C_x, C_y, 1.1], [A_x, A_y,1.0], [A_x, A_y,0.90]]
+
+            all_traj=[start_point, [B_x, B_y, 0.95],[B_x, B_y,0.87],[B_x, B_y,0.98], [A_x, A_y,0.98],[A_x, A_y,0.9],[A_x, A_y,1.05],[C_x, C_y, 0.95], [C_x, C_y, 0.87], [C_x, C_y, 1.1], [A_x, A_y,1.0], [A_x, A_y,0.93]]
+            # all_traj=[start_point, [B_x, B_y, 0.95],[B_x, B_y,0.87],[B_x, B_y,0.98], [A_x, A_y,0.98],[A_x, A_y,0.885],[A_x, A_y,1.05],[C_x, C_y, 0.95], [C_x, C_y, 0.87], [C_x, C_y, 1.1], [A_x, A_y,1.0], [A_x, A_y,0.90]]
 
             #all_traj=[start_point, [B_x, B_y,0.88],[A_x, A_y,0.91],[C_x, C_y, 0.88],  [A_x, A_y,0.94]]
 
-            allsampled, delta_all,viapoints=self.create_points(all_traj, q_start, 150)
+            allsampled, delta_all, viapoints = self.create_points(all_traj, q_start, 150)
             print("allsampled.shape", allsampled.shape)
             if allsampled is None:
                 continue
             # recorder.viapoints=viapoints
 
             self.move_point('point1', A_x, A_y, ABC[0][2])
-
             self.move_point('point2', ABC[1][0], ABC[1][1], ABC[1][2])
-
             self.move_point('point3', ABC[2][0], ABC[2][1], ABC[2][2])
             brakepoints=[viapoints[2],viapoints[5],viapoints[8],viapoints[11]]
             print("brakepoints", brakepoints)
-            indexes=self.find_closest_indices(allsampled,brakepoints)
+
+            indexes = self.find_closest_indices(allsampled,brakepoints)
             print("indexes", indexes)
 
-            if len(indexes)!=4:
+            if len(indexes) != 4:
+                print("### Index length is not 4! ###")
                 continue
             gripper_state=1
-            one_hot=[0,0,0,0]
+            one_hot=[0, 0, 0, 0]
             
-
             self.pprint("Going to initial pose...")
             # self.request_setdesqT(1, allsampled[0:9,0])   #command torso also  
             self.wait_until_reach(1, allsampled[0:10,0], SEC=12)
 
-            curretn_obs.append([0,  allsampled[2:9,0], ABC[0], ABC[1], ABC[2], one_hot ])
+            curretn_obs.append([0,  allsampled[2:9, 0], ABC[0], ABC[1], ABC[2], one_hot])
 
             time.sleep(2.0)
 
-            # Capture and save image for timestep 0
+            # Capture and save image for timestep 0 (overhead camera)
             img = self.get_current_image()
             if img is not None:
                 img_filename = os.path.join(traj_image_dir, "step_{:03d}.jpg".format(0))
                 cv2.imwrite(img_filename, img)
+            # Capture and save image for timestep 0 (side camera)
+            img_side = self.get_current_image_side()
+            if img_side is not None:
+                img_filename_side = os.path.join(traj_image_dir_side, "step_{:03d}.jpg".format(0))
+                cv2.imwrite(img_filename_side, img_side)
 
-            for i in range(1,allsampled.shape[1]):
-                if i==indexes[0]:
+            for i in range(1, allsampled.shape[1]):
+                if i == indexes[0]:
                     gripper_state=0
-                    one_hot=[1,0,0,0]
+                    one_hot = [1, 0, 0, 0]
                     print('true1 index:', i)
-                elif i==indexes[1]:
+                    
+                elif i == indexes[1]:
                     gripper_state=1
-                    one_hot=[0,1,0,0]
+                    one_hot = [0, 1, 0, 0]
                     print('true2 index:', i)
-                elif i==indexes[2]:
+
+                elif i == indexes[2]:
                     gripper_state=0
-                    one_hot=[0,0,1,0]
+                    one_hot = [0, 0, 1, 0]
                     print('true3 index:', i)
-                elif i==indexes[3]:
+
+                elif i == indexes[3]:
                     gripper_state=1
-                    one_hot=[0,0,0,1]
+                    one_hot = [0, 0, 0, 1]
                     print('true4 index:', i)
 
                 # self.request_setdesqT(1, allsampled[0:9,i]) 
-                done=self.wait_until_reach(1, allsampled[0:10,i], SEC=delta_all)
+                done = self.wait_until_reach(1, allsampled[0:10, i], SEC=delta_all)
 
                 # Arash
                 if one_hot[0]==1:
@@ -1386,19 +1419,24 @@ class UserComm():
                     self.move_point('point3', pos[0], pos[1], pos[2])
                     # comm.move('point3', pos)
                   
-                curretn_obs.append([i, allsampled[2:9,i], ABC[0], ABC[1], ABC[2], one_hot])
-                # Capture and save image for this timestep
+                curretn_obs.append([i, allsampled[2:9, i], ABC[0], ABC[1], ABC[2], one_hot])
+                # Capture and save image for this timestep (overhead camera)
                 img = self.get_current_image()
                 if img is not None:
                     img_filename = os.path.join(traj_image_dir, "step_{:03d}.jpg".format(i))
                     cv2.imwrite(img_filename, img)
+                # Capture and save image for this timestep (side camera)
+                img_side = self.get_current_image_side()
+                if img_side is not None:
+                    img_filename_side = os.path.join(traj_image_dir_side, "step_{:03d}.jpg".format(i))
+                    cv2.imwrite(img_filename_side, img_side)
 
             # recorder.thread_record.join()
 
             # if done:
-            print('added to list')
+            print('Added to list')
             obs.append(curretn_obs)
-            den+=1
+            den += 1
             # print(recorder.true_num)
             print("den", den)
             print("len(obs)", len(obs))
@@ -1409,12 +1447,13 @@ class UserComm():
             #     print('still alive ')
 
         
-        name_str="/home/arash/catkin_ws/src/erhtor3_work/triangle_images/obs_triangle.npy"
+        name_str = "/home/arash/catkin_ws/src/erhtor3_work/triangle_images_fixed_cam/obs_triangle.npy"
         np.save(name_str, obs)  
         print("Triangle data collection is DONE")
         print(len(obs))
         print(len(obs[0]))
         print(len(obs[0][0]))
+        
         
     def data_collector2(self):
         center = np.array([0.6, -0.1, 1.4])
@@ -1778,23 +1817,45 @@ class UserComm():
                 
                 if sub_list_index == len(sub_list):
                     break
-    def find_closest_indices(self,list1, list2):
-        closest_indices = []
-        prev=0
+
+
+    # def find_closest_indices(self,list1, list2):
+    #     closest_indices = []
+    #     prev=0
         
+    #     for lst2 in list2:
+    #         min_distance = float('inf')
+    #         closest_index = -1
+    #         for i in range(prev+1, 300): #150? CHECK
+    #             distance = np.linalg.norm(np.array(list1[0:10,i]) - np.array(lst2))
+                
+    #             if distance < min_distance:
+    #                 min_distance = distance
+    #                 closest_index = i
+            
+    #         closest_indices.append(closest_index)
+    #         prev=closest_index
+        
+    #     return closest_indices
+
+    def find_closest_indices(self, list1, list2):
+        closest_indices = []
+        prev = 0
         for lst2 in list2:
             min_distance = float('inf')
             closest_index = -1
-            for i in range(prev+1,150):
-                distance = np.linalg.norm(np.array(list1[0:10,i]) - np.array(lst2))
+            for i in range(prev+1, 150): #150? CHECKAMZ
+                distance = np.linalg.norm(np.array(list1[0:10, i]) - np.array(lst2))
                 
                 if distance < min_distance:
                     min_distance = distance
                     closest_index = i
-            
-            closest_indices.append(closest_index)
-            prev=closest_index
-        
+
+            if closest_index == -1:
+                continue
+            else:
+                closest_indices.append(closest_index)
+                prev = closest_index
         return closest_indices
 
 
