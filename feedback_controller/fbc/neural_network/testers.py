@@ -18,15 +18,24 @@ class Tester():
         self.step_size = self.config.step_dim
         self.target_size = self.config.coords_dim
         self.onehot_size = self.config.onehot_dim
-        
+
         self.cur_file_dir_path = os.path.dirname(__file__)
         self.device = 'cpu' #'cuda' if torch.cuda.is_available() else 'cpu'
 
-        # self.load_model(train_no=0, epoch_no=0, 
-        #                 use_custom_loss=self.config.use_custom_loss,
-        #                 model_complexity='high')
-        
-        dataset_path = os.path.join(self.cur_file_dir_path, 
+        # Load normalization parameters
+        norm_params_path = os.path.join(
+            self.cur_file_dir_path,
+            f'data/torobo/{self.config.dataset_name}/normalization_params.npz'
+        )
+        norm_params = np.load(norm_params_path)
+        self.xy_mean = norm_params['xy_mean'].flatten()  # (6,)
+        self.xy_std = norm_params['xy_std'].flatten()    # (6,)
+        self.action_std = torch.tensor(norm_params['action_std'].flatten()).to(self.device).float()
+        self.state_mean = torch.tensor(norm_params['state_mean'].flatten()).to(self.device).float()
+        self.state_std = torch.tensor(norm_params['state_std'].flatten()).to(self.device).float()
+        print(f"Loaded normalization params from {norm_params_path}")
+
+        dataset_path = os.path.join(self.cur_file_dir_path,
                                     f'data/torobo/{self.config.dataset_name}/{self.config.ds_test_file}')
         self.dataset = np.load(dataset_path, allow_pickle=True, encoding='latin1')
         print("Tester loaded dataset with shape:", self.dataset.shape)
@@ -378,11 +387,16 @@ class Tester():
     def get_real_delta_ang(self, num, use_angle):
         y1_real, y2_real, y3_real, y4_real = [], [], [], []
         y5_real, y6_real, y7_real = [], [], []
+        # Get denormalization params for joints (first 7 dims of state)
+        joint_mean = self.state_mean[:7].cpu().numpy()
+        joint_std = self.state_std[:7].cpu().numpy()
+
         for j in self.dataset[num][0:]:
-            if use_angle:
-                delta_pos=((j[1:8]))
-            else:
-                delta_pos=((j[1:8]))
+            # Joint positions are normalized in dataset at indices 1:8
+            joints_normalized = j[1:8]
+            # Denormalize: real = normalized * std + mean
+            delta_pos = joints_normalized * joint_std + joint_mean
+
             y1_real.append((delta_pos[0]))
             y2_real.append((delta_pos[1]))
             y3_real.append((delta_pos[2]))

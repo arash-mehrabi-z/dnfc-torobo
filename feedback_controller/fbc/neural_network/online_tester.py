@@ -35,12 +35,14 @@ bridge = CvBridge()
 # Load normalization parameters
 norm_params_path = os.path.join(
     cur_file_dir_path,
-    'data/torobo/trajs:360_blocks:3_imgs_2cams/normalization_params.npz'
+    f'data/torobo/{config.dataset_name}/normalization_params.npz'
 )
 norm_params = np.load(norm_params_path)
 xy_mean = norm_params['xy_mean'].flatten()  # (6,) - x,y for 3 objects
 xy_std = norm_params['xy_std'].flatten()    # (6,)
 action_std = torch.tensor(norm_params['action_std'].flatten()).to(device).float()  # (7,)
+state_mean = torch.tensor(norm_params['state_mean'].flatten()).to(device).float()  # (14,)
+state_std = torch.tensor(norm_params['state_std'].flatten()).to(device).float()    # (14,)
 
 
 class ImageBuffer:
@@ -338,9 +340,13 @@ def online_test_image(tester: Tester, eps_num, target_image_capture,
     traj_step_size = 900
 
     elem = tester.dataset[eps_num]
-    state = torch.tensor(elem[0][step_size:
+    # Initial state from dataset is NORMALIZED
+    state_normalized = torch.tensor(elem[0][step_size:
                                  step_size + state_size].tolist()
                          ).to(device).float()
+
+    # Denormalize to get real state for robot control
+    state_real = state_normalized * state_std + state_mean
 
     one_hot = elem[0][step_size + state_size + target_size:
                       step_size + state_size + target_size + onehot_size].tolist()
@@ -369,8 +375,9 @@ def online_test_image(tester: Tester, eps_num, target_image_capture,
     comm.move('point1', obstA)
     comm.move('point2', obstB)
     comm.move('point3', obstC)
-    comm.create_and_pub_msg(state[:7])
-    rospy.sleep(5)
+    # Send REAL (denormalized) joint positions to robot
+    comm.create_and_pub_msg(state_real[:7])
+    rospy.sleep(7)
 
     # Reset and capture new target image at t=0
     target_image_capture.reset()
@@ -384,8 +391,20 @@ def online_test_image(tester: Tester, eps_num, target_image_capture,
         images_dir = os.path.join(results_dir, f"images_eps_{eps_num}")
         if not os.path.exists(images_dir):
             os.makedirs(images_dir)
+        # Save raw captured image (before transforms)
         target_image_capture.save_target_image(
-            os.path.join(images_dir, "target_image_t0.jpg"))
+            os.path.join(images_dir, "target_image_t0_raw.jpg"))
+
+        # Save processed image (after crop + resize) - this is what the model sees
+        target_image_tensor = target_image_capture.get_target_image()
+        if target_image_tensor is not None:
+            # Convert tensor (1, 3, H, W) back to PIL image for visualization
+            img_for_viz = target_image_tensor.squeeze(0).cpu()  # (3, H, W)
+            img_for_viz = img_for_viz.permute(1, 2, 0).numpy()  # (H, W, 3)
+            img_for_viz = (img_for_viz * 255).astype(np.uint8)
+            processed_img = Image.fromarray(img_for_viz)
+            processed_img.save(os.path.join(images_dir, "target_image_t0_processed.jpg"))
+            print(f"Processed image saved (shape: {target_image_tensor.shape})")
 
     traj_point = 0
     all_joints = []
@@ -403,11 +422,19 @@ def online_test_image(tester: Tester, eps_num, target_image_capture,
             rospy.logwarn("Target image not available, skipping step")
             continue
 
-        # Prepare robot state and touch history
-        state_nn = torch.unsqueeze(state, 0).float()
+        # Prepare NORMALIZED state for model input
+        state_nn = torch.unsqueeze(state_normalized, 0).float()
         touch_history = torch.tensor([one_hot]).to(device).float()
 
         with torch.no_grad():
+            img_for_viz = target_image.squeeze(0).cpu()  # (3, H, W)
+            img_for_viz = img_for_viz.permute(1, 2, 0).numpy()  # (H, W, 3)
+            img_for_viz = (img_for_viz * 255).astype(np.uint8)
+            model_input_img = Image.fromarray(img_for_viz)
+            model_input_img.save(os.path.join(images_dir, f"model_input_image_{i}.jpg"))
+            print(f"Model input image saved - shape: {target_image.shape}, "
+                  f"min: {target_image.min():.3f}, max: {target_image.max():.3f}")
+
             velocities_tensor, x_des, _ = tester.model(
                 target_image, state_nn, touch_history)
 
@@ -415,21 +442,27 @@ def online_test_image(tester: Tester, eps_num, target_image_capture,
         latent_reps.append(x_des_squeezed.tolist())
 
         velocities_tensor = torch.squeeze(velocities_tensor, 0)
-        # Denormalize actions if needed
-        velocities_tensor = velocities_tensor * action_std
-        state[:7] += (5 * velocities_tensor)
+        # Denormalize actions to get real velocities
+        velocities_real = velocities_tensor * action_std
+        # Update real joint positions
+        state_real[:7] += (3 * velocities_real) #AMZ?
 
-        comm.create_and_pub_msg(state[:7])
+        # Send REAL positions to robot
+        comm.create_and_pub_msg(state_real[:7])
         rospy.sleep(0.05)
         comm.jsLock.acquire()
-        js = torch.tensor((list(comm.joint_state))).to(device).float()
+        js_real = torch.tensor((list(comm.joint_state))).to(device).float()
         comm.jsLock.release()
 
-        state = torch.cat((js, velocities_tensor), dim=0).to(device)
-        all_joints.append(state[:7])
-        all_states.append(state.tolist())
+        # Update real state (positions from robot, velocities from model output)
+        state_real = torch.cat((js_real, velocities_real), dim=0).to(device)
+        # Normalize state for next iteration's model input
+        state_normalized = (state_real - state_mean) / state_std
 
-        pos = tester.get_end_eff(js.tolist())
+        all_joints.append(state_real[:7])
+        all_states.append(state_real.tolist())
+
+        pos = tester.get_end_eff(js_real.tolist())
         if one_hot[0] == 1:
             pos[2] -= 0.02
             comm.move('point2', pos)
@@ -437,22 +470,23 @@ def online_test_image(tester: Tester, eps_num, target_image_capture,
             pos[2] -= 0.02
             comm.move('point3', pos)
 
-        if traj_point == 0 and tester.close_enough(state, grepB):
+        # Use real state for waypoint checking
+        if traj_point == 0 and tester.close_enough(state_real, grepB):
             traj_point = 1
             one_hot = [1, 0, 0, 0]
             print('here1')
             print(i)
-        elif traj_point == 1 and tester.close_enough(state, putB):
+        elif traj_point == 1 and tester.close_enough(state_real, putB):
             traj_point = 2
             one_hot = [0, 1, 0, 0]
             print('here2')
             print(i)
-        elif traj_point == 2 and tester.close_enough(state, grepC):
+        elif traj_point == 2 and tester.close_enough(state_real, grepC):
             traj_point = 3
             one_hot = [0, 0, 1, 0]
             print('here3')
             print(i)
-        elif traj_point == 3 and tester.close_enough(state, putC):
+        elif traj_point == 3 and tester.close_enough(state_real, putC):
             traj_point = 4
             one_hot = [0, 0, 0, 1]
             print('here4')
