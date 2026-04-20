@@ -228,15 +228,14 @@ class GeneralModel(nn.Module):
             # Map CNN latent + one_hot to state space
             combined_dim = cnn_latent + onehot_dim
             self.to_state_space = MLP_2L(combined_dim, 2 * combined_dim, encoded_space_dim)
-            # 3-layer controller for image mode
-            self.mlp_controller = MLP_3L(encoded_space_dim, cont_hid, cont_hid, action_dim)
-            self.mlp_controller.linear[-1].bias.data.fill_(0.0)
         else:
             self.enc1 = MLP_2L(target_dim, enc_hid, encoded_space_dim)
-            self.mlp_controller = MLP_2L(encoded_space_dim, cont_hid, action_dim)
-            self.mlp_controller.linear[-1].bias.data.fill_(0.0)
 
-    def forward(self, target_repr, state, touch_history=None):
+        # Controller (shared for both modes)
+        self.mlp_controller = MLP_3L(encoded_space_dim, cont_hid, cont_hid, action_dim)
+        self.mlp_controller.linear[-1].bias.data.fill_(0.0)
+
+    def forward(self, target_repr, state, touch_history):
         x = state
 
         if self.use_image:
@@ -247,7 +246,9 @@ class GeneralModel(nn.Module):
             # Map to state space (x_des)
             x_des = self.to_state_space(combined)
         else:
-            x_des = self.enc1(target_repr)
+            # Concatenate coords and touch_history for encoder input
+            target_full = torch.cat((target_repr, touch_history), dim=1)
+            x_des = self.enc1(target_full)
 
         diff = x_des - x
 

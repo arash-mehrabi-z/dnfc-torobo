@@ -123,12 +123,17 @@ class TrajectoryDataset(Dataset):
 
             return step, state, target_image, touch_history, action
         else:
-            target_start_idx = 1 + self.state_dim
-            target_end_idx = target_start_idx + self.target_dim
-            target_repr = self.trajectories[traj_no, step_no,
-                                           target_start_idx:target_end_idx]
+            # Coordinates (target representation)
+            coords_start = 1 + self.state_dim
+            coords_end = coords_start + self.coords_dim
+            target_repr = self.trajectories[traj_no, step_no, coords_start:coords_end]
 
-            return step, state, target_repr, action
+            # Touch history (one-hot)
+            onehot_start = coords_end
+            onehot_end = onehot_start + self.onehot_dim
+            touch_history = self.trajectories[traj_no, step_no, onehot_start:onehot_end]
+
+            return step, state, target_repr, touch_history, action
 
 
 class TwoStreamDataset(Dataset):
@@ -300,27 +305,23 @@ def run_test(n):
             batch_images_front = batch_data[3].to(device).float()
             batch_images_side = batch_data[4].to(device).float()
             batch_action = batch_data[5].to(device).float()
-        elif use_image:
-            # use_image=True: (step, state, target_image, touch_history, action)
+        else:
+            # Both use_image=True and use_image=False return:
+            # (step, state, target_repr, touch_history, action)
             batch_touch_history = batch_data[3].to(device).float()
             batch_action = batch_data[4].to(device).float()
-        else:
-            batch_action = batch_data[3].to(device).float()
 
         model.eval()
         with torch.no_grad():
             if use_two_stream:
                 batch_action_pred = model(batch_target_repr, batch_images_front, batch_images_side)
-            elif use_image:
-                # target_repr is image, pass touch_history
-                batch_action_pred, batch_x_des, batch_diff = model(
-                    batch_target_repr, batch_state, batch_touch_history)
             elif use_baseline:
                 nn_input = torch.cat((batch_target_repr, batch_state), dim=1)
                 batch_action_pred = model(nn_input)
             else:
-                batch_action_pred, batch_x_des, batch_diff = model(batch_target_repr,
-                                                                   batch_state)
+                # GeneralModel: pass target_repr, state, and touch_history
+                batch_action_pred, batch_x_des, batch_diff = model(
+                    batch_target_repr, batch_state, batch_touch_history)
 
         if use_custom_loss:
             loss_custom, loss_torques = criterion(batch_action_pred, batch_action,
@@ -452,7 +453,7 @@ action_dim = joints_num
 
 # Training:
 use_baseline = False
-use_image = True  # Set to True to use image at t=0 as target representation
+use_image = False  # Set to True to use image at t=0 as target representation
 use_two_stream = False
 use_custom_loss = config.use_custom_loss
 num_epochs = 12000 + 1
@@ -482,6 +483,8 @@ for model_complexity in ['high']: #'low', 'medium', 'high', 'xhigh']:
     enc_hid, cont_hid, lin_hid, lin_out = config.get_model_dims(model_complexity)
     if use_image:
         cnn_latent, cont_hid = config.get_image_model_dims(model_complexity)
+    else:
+        cnn_latent = None  # Not used when use_image=False
     
     for i_train in range(num_trains):
         fig_1 = plt.figure(figsize=(12.8, 9.6))
@@ -523,17 +526,19 @@ for model_complexity in ['high']: #'low', 'medium', 'high', 'xhigh']:
                                         joints_num, use_image=False,
                                         coords_dim=config.coords_dim,
                                         onehot_dim=config.onehot_dim)
-        if use_two_stream or use_image:
-            train_set, val_set = torch.utils.data.random_split(dataset, [0.9, 0.1])
-        else:
-            split_file_path = os.path.join(ds_root_dir, config.train_val_file)
-            split = torch.load(split_file_path)
-            train_indices = split['train_indices']
-            val_indices = split['val_indices']
-            train_set = Subset(dataset, train_indices)
-            val_set = Subset(dataset, val_indices)
-            print(f"First five train_indices: {train_indices[:5]}")
-            print(f"First five val_indices: {val_indices[:5]}")
+        # if use_two_stream or use_image:
+        #     train_set, val_set = torch.utils.data.random_split(dataset, [0.9, 0.1])
+        # else:
+        #     split_file_path = os.path.join(ds_root_dir, config.train_val_file)
+        #     split = torch.load(split_file_path)
+        #     train_indices = split['train_indices']
+        #     val_indices = split['val_indices']
+        #     train_set = Subset(dataset, train_indices)
+        #     val_set = Subset(dataset, val_indices)
+        #     print(f"First five train_indices: {train_indices[:5]}")
+        #     print(f"First five val_indices: {val_indices[:5]}")
+
+        train_set, val_set = torch.utils.data.random_split(dataset, [0.9, 0.1])
         print("train_set:", len(train_set))
         print("val_set:", len(val_set))
 
@@ -632,34 +637,50 @@ for model_complexity in ['high']: #'low', 'medium', 'high', 'xhigh']:
                     batch_images_front = batch_data[3].to(device).float()
                     batch_images_side = batch_data[4].to(device).float()
                     batch_action = batch_data[5].to(device).float()
-                elif use_image:
-                    # use_image=True: (step, state, target_image, touch_history, action)
+                else:
+                    # Both use_image=True and use_image=False return:
+                    # (step, state, target_repr, touch_history, action)
                     batch_touch_history = batch_data[3].to(device).float()
                     batch_action = batch_data[4].to(device).float()
-                else:
-                    batch_action = batch_data[3].to(device).float()
 
                 batch_noise = torch.normal(mean=0.0, std=noise_std,
                                         size=(batch_state.size()[0], encoded_space_dim)
                                         ).to(device).float()
                 batch_state_noise = batch_state + batch_noise #AMZ
 
+                # Visualize image just before feeding to model (only once: first batch, first epoch)
+                if n == 0 and i == 0 and use_image:
+                    # Save 8 images from batch in 2x4 grid
+                    fig_viz, axes = plt.subplots(2, 4, figsize=(16, 8))
+                    num_images_to_show = min(8, batch_target_repr.shape[0])
+                    for idx in range(num_images_to_show):
+                        row, col = idx // 4, idx % 4
+                        img_for_viz = batch_target_repr[idx].cpu()  # (3, H, W)
+                        img_for_viz = img_for_viz.permute(1, 2, 0).numpy()  # (H, W, 3)
+                        img_for_viz = np.clip(img_for_viz, 0, 1)
+                        axes[row, col].imshow(img_for_viz)
+                        axes[row, col].set_title(f"Sample {idx}")
+                        axes[row, col].axis('off')
+                    plt.tight_layout()
+                    viz_path = os.path.join(weights_storage_root_dir, "model_input_images.jpg")
+                    plt.savefig(viz_path)
+                    plt.close(fig_viz)
+                    print(f"Model input images saved to: {viz_path}")
+                    print(f"  Shape: {batch_target_repr.shape}, "
+                          f"min: {batch_target_repr.min():.3f}, max: {batch_target_repr.max():.3f}")
+
                 optimizer.zero_grad()
                 if use_two_stream:
                     batch_action_pred_noise = model(batch_target_repr, batch_images_front, batch_images_side)
                     batch_action_noise = batch_action
-                elif use_image:
-                    # target_repr is image, pass touch_history
-                    batch_action_pred_noise, batch_x_des_noise, batch_diff_noise = model(
-                        batch_target_repr, batch_state_noise, batch_touch_history)
-                    batch_action_noise = batch_action #- batch_noise[:, :joints_num] #AMZ
                 elif use_baseline:
                     nn_input = torch.cat((batch_target_repr, batch_state_noise), dim=1)
                     batch_action_pred_noise = model(nn_input)
                     batch_action_noise = batch_action #- batch_noise[:, :joints_num]
                 else:
-                    batch_action_pred_noise, batch_x_des_noise, \
-                        batch_diff_noise = model(batch_target_repr, batch_state_noise)
+                    # GeneralModel: pass target_repr, state, and touch_history
+                    batch_action_pred_noise, batch_x_des_noise, batch_diff_noise = model(
+                        batch_target_repr, batch_state_noise, batch_touch_history)
                     batch_action_noise = batch_action #- batch_noise[:, :joints_num]
 
                 if use_custom_loss:
