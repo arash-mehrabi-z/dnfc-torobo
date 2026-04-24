@@ -3,49 +3,50 @@ from testers import Tester
 import time
 import os
 import csv
+from config import Config
 
 
 cur_file_dir_path = os.path.dirname(__file__)
-num_params = 25.301 #294.037 #288.661
-# num_params_base = 293.631
-epoch_num = 350
-ds_name = 'trajs:360_blocks:3' + '_triangle_v'
+config = Config()
 
-results_dir = os.path.join(cur_file_dir_path, 
+# Model parameters
+model_complexity = 'high'
+epoch_num = 0
+use_custom_loss = config.use_custom_loss
+use_image = True  # Use image at t=0 as target representation
+
+# Create tester and load model
+t = Tester()
+t.load_model(train_no=0, epoch_no=epoch_num, use_custom_loss=use_custom_loss,
+             model_complexity=model_complexity, use_image=use_image)
+
+# Get model params for results directory
+num_params = config.get_params_num(t.model)
+ds_name = config.dataset_name
+
+results_dir = os.path.join(cur_file_dir_path,
                            f'results/{ds_name}_{num_params}K/ep:{epoch_num}/emul')
 if not os.path.exists(results_dir):
     os.makedirs(results_dir)
 
 loss_file_path = os.path.join(results_dir, "perf.csv")
 with open(loss_file_path, 'w') as f:
-      writer = csv.writer(f)
-      row = ["epoch", "dnfc", "basel"]
-      writer.writerow(row)
+    writer = csv.writer(f)
+    row = ["epoch", "dnfc"]
+    writer.writerow(row)
 
-t = Tester()
-# t.get_perform3()
-
-# print('emulated',t.get_base_loss('emulated'))
-# print(t.get_base_loss('offline'))
-
-# print('emulated',t.get_model_loss('emulated'))
-# print(t.get_model_loss('offline'))
-dnfc_perf = t.calculate_cartesian_perform(use_baseline=False)
-print('this is our perform', dnfc_perf)
-basel_perf = t.calculate_cartesian_perform(use_baseline=True)
-print('this is base perform', basel_perf)
+# Calculate performance
+dnfc_perf = t.calculate_cartesian_perform(use_baseline=False, use_image=use_image)
+print('DNFC performance:', dnfc_perf)
 
 loss_file_path = os.path.join(results_dir, "perf.csv")
 with open(loss_file_path, 'a') as f:
-      writer = csv.writer(f)
-      row = [epoch_num, dnfc_perf, basel_perf]
-      writer.writerow(row)
+    writer = csv.writer(f)
+    row = [epoch_num, dnfc_perf]
+    writer.writerow(row)
 
-for num in range(0, 360, 7):
-    x_model, y_model, z_model = t.get_coordinats(num, 
-                                                 use_baseline=False)
-    x_base, y_base, z_base = t.get_coordinats(num, 
-                                              use_baseline=True)
+for num in range(0, t.dataset.shape[0]):
+    x_model, y_model, z_model = t.get_coordinats(num, use_baseline=False, use_image=use_image)
     x_real, y_real, z_real = t.get_real_coordinates(num)
 
     obstA, obstB, obstC = t.get_obs_coordinates(num)
@@ -54,13 +55,11 @@ for num in range(0, 360, 7):
     fig = plt.figure(figsize=(12.8, 9.6))
     ax = fig.add_subplot(111, projection='3d')
 
-    # Plot real
+    # Plot trajectories
     ax.plot(x_real, y_real, z_real, c='r', label='G.Truth')
     ax.plot(x_model, y_model, z_model, c='b', label='DNFC')
-    ax.plot(x_base, y_base, z_base, c='g', label='Basel')
-    ax.scatter(x_base, y_base, z_base, c='g',s=5)
-    ax.scatter(x_real, y_real, z_real, c='r',s=5)
-    ax.scatter(x_model, y_model, z_model, c='b',s=5)
+    ax.scatter(x_real, y_real, z_real, c='r', s=5)
+    ax.scatter(x_model, y_model, z_model, c='b', s=5)
 
     ax.scatter([obstA[0]], [obstA[1]], [obstA[2]], c='k', marker='o')
     ax.scatter([obstB[0]], [obstB[1]], [obstB[2]], c='k', marker='o')
@@ -75,11 +74,11 @@ for num in range(0, 360, 7):
     ax.set_xlabel('X Axis')
     ax.set_ylabel('Y Axis')
     ax.set_zlabel('Z Axis')
-    ax.set_title('Trajectories')
+    ax.set_title(f'Trajectory {num} - Performance: {dnfc_perf:.2%}')
     ax.legend()
 
     plot_path = os.path.join(results_dir, f'plt_{num}.png')
     plt.savefig(plot_path)
     plt.close()
-    # Show plot
-    # plt.show()
+
+print(f"Results saved to {results_dir}")

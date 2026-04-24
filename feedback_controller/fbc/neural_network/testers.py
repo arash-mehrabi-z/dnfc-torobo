@@ -7,6 +7,8 @@ import torch.nn as nn
 import math
 import os
 from config import Config
+from PIL import Image
+from torchvision import transforms
 
 
 class Tester():
@@ -44,6 +46,44 @@ class Tester():
         self.kin = TorKin()
         self.criterion = nn.L1Loss()
         self.criterion_mse = nn.MSELoss(reduction='sum')
+
+        # Image preprocessing for use_image=True mode
+        self.crop_params = {
+            'top': 210,
+            'left': 220,
+            'height': 150,
+            'width': 200,
+        }
+        transform_list = [
+            transforms.Lambda(lambda img: transforms.functional.crop(
+                img,
+                top=self.crop_params['top'],
+                left=self.crop_params['left'],
+                height=self.crop_params['height'],
+                width=self.crop_params['width']
+            )),
+            transforms.Resize(self.config.image_size),
+            transforms.ToTensor(),
+        ]
+        self.image_transform = transforms.Compose(transform_list)
+        self.img_dir = os.path.join(
+            self.cur_file_dir_path,
+            f'data/torobo/{self.config.dataset_name}/triangle_images_fixed_cam'
+        )
+
+        # Load test trajectory mapping if available
+        mapping_file = os.path.join(
+            self.cur_file_dir_path,
+            f'data/torobo/{self.config.dataset_name}/traj_mapping_{self.config.ds_ratio_test}.npz'
+        )
+        if os.path.exists(mapping_file):
+            mapping = np.load(mapping_file)
+            self.test_traj_indices = mapping['test_traj_indices']
+            print(f"Loaded test trajectory mapping: {len(self.test_traj_indices)} trajectories")
+        else:
+            # Fallback: assume 1:1 mapping
+            self.test_traj_indices = np.arange(self.dataset.shape[0])
+            print(f"No trajectory mapping found, using 1:1 mapping")
 
     def load_model(self, train_no, epoch_no, use_custom_loss, model_complexity,
                    use_image=False):
@@ -155,7 +195,7 @@ class Tester():
         else:
             self.model.eval()
 
-        for i in range(299):
+        for i in range(self.dataset.shape[1]):
             input_tensor = torch.tensor(elem[i][self.step_size:self.step_size+self.state_size].tolist()).float()
 
             # input_tensor=torch.cat((joint_angles_tensor,velocities_tensor),dim=0)
@@ -172,7 +212,7 @@ class Tester():
             else:
                 velocities_tensor = self.model(goal_nn, state_nn, touch_history)[0]
                 velocities_tensor = torch.squeeze(velocities_tensor, 0)
-                
+
             y1.append(float(velocities_tensor[0]))
             y2.append(float(velocities_tensor[1]))
             y3.append(float(velocities_tensor[2]))
@@ -185,27 +225,48 @@ class Tester():
         return y1,y2,y3,y4,y5,y6,y7
     
 
-    def get_emulated(self, use_baseline, num, use_angle=False, return_path_point=False):
+    def get_emulated(self, use_baseline, num, use_angle=False, return_path_point=False,
+                      use_image=False):
         out = False
         y1, y2, y3, y4, y5, y6, y7 = [], [], [], [], [], [], []
         elem = self.dataset[num]
-        state = torch.tensor(elem[0][self.step_size :
+
+        # Initial state from dataset is NORMALIZED
+        state_normalized = torch.tensor(elem[0][self.step_size :
                                      self.step_size+self.state_size].tolist()
                                      ).to(self.device).float()
+        # Denormalize to get real state
+        state_real = state_normalized * self.state_std + self.state_mean
 
-        goal = elem[0][self.step_size + self.state_size : 
+        # Goal contains NORMALIZED coordinates (6 dims: x,y for 3 objects)
+        goal_normalized = elem[0][self.step_size + self.state_size :
                        self.step_size + self.state_size + self.target_size].tolist()
         one_hot = elem[0][self.step_size + self.state_size + self.target_size :
                           self.step_size + self.state_size + self.target_size + self.onehot_size
                           ].tolist()
-        
+
+        # Denormalize coordinates for waypoint checking
+        goal_real = (np.array(goal_normalized) * self.xy_std) + self.xy_mean
+
+        # Load target image at step 0 if use_image=True
+        target_image = None
+        if use_image:
+            original_traj_no = self.test_traj_indices[num]
+            img_path = os.path.join(
+                self.img_dir,
+                f"traj_{original_traj_no:03d}/step_000.jpg"
+            )
+            target_image = Image.open(img_path).convert('RGB')
+            target_image = self.image_transform(target_image)
+            target_image = target_image.unsqueeze(0).to(self.device).float()  # (1, 3, H, W)
+
         milestones = self.get_changes_indexes(num)
 
         # 6D coordinates: x,y for 3 objects (z is fixed at 0.865)
         z_fixed = 0.865
-        obstA = torch.tensor([goal[0], goal[1], z_fixed])
-        obstB = torch.tensor([goal[2], goal[3], z_fixed])
-        obstC = torch.tensor([goal[4], goal[5], z_fixed])
+        obstA = torch.tensor([goal_real[0], goal_real[1], z_fixed])
+        obstB = torch.tensor([goal_real[2], goal_real[3], z_fixed])
+        obstC = torch.tensor([goal_real[4], goal_real[5], z_fixed])
         grepB = [obstB[0], obstB[1], 0.87]
         putB = [obstA[0], obstA[1], 0.9]
         grepC = [obstC[0], obstC[1], 0.87]
@@ -213,7 +274,7 @@ class Tester():
 
         path_point = 0
         # print(milestones)
-        milestone_js = [torch.tensor(elem[milestones[0]-1][self.step_size : self.step_size+self.joint_size].tolist()), 
+        milestone_js = [torch.tensor(elem[milestones[0]-1][self.step_size : self.step_size+self.joint_size].tolist()),
                         torch.tensor(elem[milestones[1]-1][self.step_size : self.step_size+self.joint_size].tolist()),
                         torch.tensor(elem[milestones[2]-1][self.step_size : self.step_size+self.joint_size].tolist()),
                         torch.tensor(elem[milestones[3]-1][self.step_size : self.step_size+self.joint_size].tolist())
@@ -221,35 +282,51 @@ class Tester():
         if out:
             print(milestone_js)
             print('this is A')
-            print(goal[:3])
+            print(goal_real[:2])
             print('this is B')
-            print(goal[3:6])
+            print(goal_real[2:4])
             print('this is C')
-            print(goal[6:])
+            print(goal_real[4:6])
 
         if use_baseline:
             self.baseline.eval()
         else:
             self.model.eval()
-        
+
         for i in range(self.dataset.shape[1]):
-            goal_tensor = torch.tensor(goal).to(self.device).float()
-            goal_nn = torch.unsqueeze(goal_tensor, 0)
-            state_nn = torch.unsqueeze(state, 0).float()
+            # Model receives NORMALIZED inputs
+            state_nn = torch.unsqueeze(state_normalized, 0).float()
             touch_history = torch.tensor([one_hot]).to(self.device).float()
-            if use_baseline:
-                basel_input = torch.cat((goal_nn, touch_history, state_nn), dim=1)
-                velocities_tensor = self.baseline(basel_input)
-            else:
-                velocities_tensor, x_des, _ = self.model(goal_nn, state_nn, touch_history)
+
+            with torch.no_grad():
+                if use_baseline:
+                    goal_tensor = torch.tensor(goal_normalized).to(self.device).float()
+                    goal_nn = torch.unsqueeze(goal_tensor, 0)
+                    basel_input = torch.cat((goal_nn, touch_history, state_nn), dim=1)
+                    velocities_tensor = self.baseline(basel_input)
+                elif use_image:
+                    # Use image as target representation
+                    velocities_tensor, x_des, _ = self.model(
+                        target_image, state_nn, touch_history)
+                else:
+                    goal_tensor = torch.tensor(goal_normalized).to(self.device).float()
+                    goal_nn = torch.unsqueeze(goal_tensor, 0)
+                    velocities_tensor, x_des, _ = self.model(goal_nn, state_nn, touch_history)
 
             velocities_tensor = torch.squeeze(velocities_tensor, 0)
+            # Denormalize velocities
+            velocities_real = velocities_tensor * self.action_std
+
+            # Update real state
+            state_real[:7] += velocities_real
+            state_real[7:] = velocities_real
+            # Re-normalize state for next iteration
+            state_normalized = (state_real - self.state_mean) / self.state_std
+
             print_it_out = out
 
-            state[:7] += velocities_tensor
-            state[7:] = velocities_tensor
-
-            if path_point==0 and self.close_enough(state, grepB):
+            # Use real state for waypoint checking
+            if path_point == 0 and self.close_enough(state_real, grepB):
                 # print(i)
                 path_point = 1
                 one_hot = [1, 0, 0, 0]
@@ -257,32 +334,33 @@ class Tester():
                     print(x_des)
                     print(self.get_end_eff(x_des))
 
-            elif path_point==1 and self.close_enough(state, putB):
+            elif path_point == 1 and self.close_enough(state_real, putB):
                 path_point = 2
                 one_hot = [0, 1, 0, 0]
                 if print_it_out:
                     print(x_des)
                     print(self.get_end_eff(x_des))
 
-            elif path_point==2 and self.close_enough(state, grepC):
+            elif path_point == 2 and self.close_enough(state_real, grepC):
                 path_point = 3
-                one_hot = [0, 0, 1, 0]           
+                one_hot = [0, 0, 1, 0]
                 if print_it_out:
                     print(x_des)
                     print(self.get_end_eff(x_des))
 
-            elif path_point==3 and self.close_enough(state, putC):
+            elif path_point == 3 and self.close_enough(state_real, putC):
                 path_point = 4
-                one_hot=[0, 0, 0, 1]   
+                one_hot = [0, 0, 0, 1]
                 if print_it_out:
                     print(x_des)
                     print(self.get_end_eff(x_des))
 
+            # Return real (denormalized) values
             if use_angle:
-                add = velocities_tensor
+                add = velocities_real
             else:
-                add = state
-                
+                add = state_real
+
             y1.append(float(add[0]))
             y2.append(float(add[1]))
             y3.append(float(add[2]))
@@ -292,9 +370,9 @@ class Tester():
             y7.append(float(add[6]))
 
         if return_path_point:
-            return y1,y2,y3,y4,y5,y6,y7,path_point
+            return y1, y2, y3, y4, y5, y6, y7, path_point
         else:
-            return y1,y2,y3,y4,y5,y6,y7
+            return y1, y2, y3, y4, y5, y6, y7
         
 
     def get_emulated_s(self,usebaseline,num,use_angle=False,return_path_point=False):
@@ -321,7 +399,7 @@ class Tester():
         else:
             self.model.eval()
         
-        for i in range(299):
+        for i in range(self.dataset.shape[1]):
             goal_tensor = torch.tensor(goal).float()
             goal_nn = torch.unsqueeze(goal_tensor, 0)
             state_nn = torch.unsqueeze(state, 0).float()
@@ -335,9 +413,8 @@ class Tester():
                 velocities_tensor, x_des = self.model(goal_nn, state_nn, touch_history)[0:2]
                 velocities_tensor = torch.squeeze(velocities_tensor, 0)
 
-            
-            state[:7]+=velocities_tensor
-            state[7:]=velocities_tensor
+            state[:7] += velocities_tensor
+            state[7:] = velocities_tensor
             if path_point==0 and self.close_enough(state[:7],milestone_js[0]):
                 # print(i)
                 path_point=1
@@ -379,9 +456,10 @@ class Tester():
 
 
     
-    def get_coordinats(self, num, use_baseline):
-        y1, y2, y3, y4, y5, y6, y7 = self.get_emulated(use_baseline, num, 
-                                                       use_angle=False)
+    def get_coordinats(self, num, use_baseline, use_image=False):
+        y1, y2, y3, y4, y5, y6, y7 = self.get_emulated(use_baseline, num,
+                                                       use_angle=False,
+                                                       use_image=use_image)
         x,y,z=[],[],[]
         for i in range(len(y1)):
             my_l=[0,0]+[y1[i]]+[y2[i]]+[y3[i]]+[y4[i]]+[y5[i]]+[y6[i]]+[y7[i]]
@@ -451,17 +529,25 @@ class Tester():
         dist = np.linalg.norm(p1-p2)
         # print(p1, p2, dist)
         # if (self.criterion_mse(torch.tensor(p1), torch.tensor(p2))**0.5) <= 0.0001: 
-        if dist <= 0.015:#0.02:
+        if dist <= 0.015: #0.02:
             return True
         return False
 
 
     def get_obs_coordinates(self, num):
-        # 6D coordinates: x,y for 3 objects
+        # 6D coordinates: x,y for 3 objects (NORMALIZED in dataset)
         elem = self.dataset[num]
-        obstA = elem[1][1+self.state_size:1+self.state_size+(1*2)]
-        obstB = elem[1][1+self.state_size+(1*2):1+self.state_size+(2*2)]
-        obstC = elem[1][1+self.state_size+(2*2):1+self.state_size+(3*2)]
+        goal_normalized = elem[0][self.step_size + self.state_size :
+                                  self.step_size + self.state_size + self.target_size]
+
+        # Denormalize coordinates
+        goal_real = (np.array(goal_normalized) * self.xy_std) + self.xy_mean
+
+        # Add fixed z coordinate
+        z_fixed = 0.865
+        obstA = np.array([goal_real[0], goal_real[1], z_fixed])
+        obstB = np.array([goal_real[2], goal_real[3], z_fixed])
+        obstC = np.array([goal_real[4], goal_real[5], z_fixed])
 
         return obstA, obstB, obstC
 
@@ -485,7 +571,7 @@ class Tester():
         indexes = []
         start = [0, 0, 0, 0]
         elem = self.dataset[num]
-        for i in range(299):
+        for i in range(self.dataset.shape[1]):
             goal = elem[i][self.step_size+self.state_size :
                            self.step_size+self.state_size+self.target_size+self.onehot_size
                            ].tolist()
@@ -495,11 +581,13 @@ class Tester():
                     start = goal[self.target_size:]
         return indexes
 
-    def calculate_cartesian_perform(self, use_baseline):
+    def calculate_cartesian_perform(self, use_baseline, use_image=False):
         point_reached = 0
-        for num in range(self.dataset.shape[0]): 
-            point_reached += self.get_emulated(use_baseline, num, 
-                                               False, True)[7]
+        for num in range(self.dataset.shape[0]):
+            point_reached += self.get_emulated(use_baseline, num,
+                                               use_angle=False,
+                                               return_path_point=True,
+                                               use_image=use_image)[7]
         return point_reached/(4*self.dataset.shape[0])   
 
     def get_end_eff(self, js):

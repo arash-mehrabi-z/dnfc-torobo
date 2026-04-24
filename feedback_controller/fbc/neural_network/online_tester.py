@@ -966,7 +966,7 @@ kin = TorKin()
 use_only_dnfc = True
 use_two_stream = False  # Set to True to use TwoStreamBaseline with images
 use_image = False  # Set to True to use GeneralModel with image at t=0 as target
-epoch_no = 8000 #4000
+epoch_no = 3300 #4000
 train_num = 1
 # Camera topics for front and side cameras
 image_topic_front = '/fixed_camera/image_raw'  # Front camera (head camera)

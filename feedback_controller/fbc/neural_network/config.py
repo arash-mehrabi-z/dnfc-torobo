@@ -5,7 +5,7 @@ class Config:
         self.num_steps = 299
         self.C = 1e-5
 
-        self.v_name = "cart_task_enc_conc" #"img_task_enc" #"2+2l_lat:sub-nvel"
+        self.v_name = "img_task_enc" #"cart_task_enc_conc" #"2+2l_lat:sub-nvel"
         self.v_name_base = "3l_base" #"4l_base"
         self.v_name_two_stream = "two_stream_two_encs_combine_latent_base"
         self.num_history_images = 3
