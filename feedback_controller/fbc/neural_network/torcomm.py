@@ -1210,22 +1210,22 @@ class UserComm():
             return True
         
 
-    def create_points(self,pointlist,q_start, NUM_SAMPLE_FOR_PLAY=50):
+    def create_points(self, pointlist, q_start, NUM_SAMPLE_FOR_PLAY=50):
         des_z = np.array([0., 0., -1.])
         des_y = np.array([0., 1., 0.])
-        des_x = np.cross(des_y,des_z)
+        des_x = np.cross(des_y, des_z)
         R_des = np.array([des_x, des_y, des_z]).T
 
         #NUM_SAMPLE_FOR_PLAY = 50   # Was 20 before April 6, 2023
-        q_curr=q_start
+        q_curr = q_start
         viapoint_list = []
         for i in pointlist:
-            q, solved, errL,itused = self.kin.ik(1, np.array(i), R_des, qinit=q_curr,  maxit=400, IKstep_show=0)
+            q, solved, errL, itused = self.kin.ik(1, np.array(i), R_des, qinit=q_curr,  maxit=400, IKstep_show=0)
             
             if not solved:
                 print pointlist
-                print "IK failed for point:",i
-                return None, None,None
+                print "IK failed for point:", i
+                return None, None, None
             viapoint_list.append(q)
 
             q_curr = q
@@ -1244,7 +1244,9 @@ class UserComm():
         x_new = px * cos_angle - py * sin_angle
         y_new = px * sin_angle + py * cos_angle
         return x_new, y_new
-    def create_triang(self,center_x, center_y, distance, alpha):
+    
+
+    def create_triang(self, center_x, center_y, distance, alpha):
         height = math.sqrt(3) / 2 * distance
         
         # Initial vertices relative to the center (before rotation)
@@ -1262,12 +1264,12 @@ class UserComm():
         p2_final = (p2_rotated[0] + center_x, p2_rotated[1] + center_y)
         p3_final = (p3_rotated[0] + center_x, p3_rotated[1] + center_y)
         
-        return p1_final[0],p1_final[1], p2_final[0],p2_final[1], p3_final[0],p3_final[1]
+        return p1_final[0], p1_final[1], p2_final[0], p2_final[1], p3_final[0], p3_final[1]
 
     def data_collector_triangle(self):
         des_z = np.array([0., 0., -1.])
         des_y = np.array([0., 1., 0.])
-        des_x = np.cross(des_y,des_z)
+        des_x = np.cross(des_y, des_z)
         R_des = np.array([des_x, des_y, des_z]).T
         center_x = 0.425 #+ 0.05
         center_y = -0.175 #+ 0.07
@@ -1319,14 +1321,15 @@ class UserComm():
             # # Ensure head is looking at the workspace center
             # self.lookat(gaze_target)
 
-            A_x,A_y,B_x,B_y,C_x,C_y=self.create_triang(center_x,center_y,dist,alpha)
-            alpha+=1
+            # AMZ: Study this function further (create_triang)
+            A_x, A_y, B_x, B_y, C_x, C_y = self.create_triang(center_x,center_y,dist,alpha)
+            alpha += 1
             print("alpha", alpha)
 
-            A=[A_x, A_y, 0.865]
-            B=[B_x, B_y, 0.865]
-            C=[C_x, C_y, 0.865]
-            ABC=[A,B,C]
+            A = [A_x, A_y, 0.865]
+            B = [B_x, B_y, 0.865]
+            C = [C_x, C_y, 0.865]
+            ABC = [A, B, C]
             # recorder.ABC=ABC
 
             q_start, solved, errL, itused = self.kin.ik(1, np.array(start_point), R_des, maxit=1000, IKstep_show=0)
@@ -1338,7 +1341,10 @@ class UserComm():
             trajC_A=[ [C_x, C_y, 0.865], [C_x, C_y, 1.1], [A_x, A_y,1.1], [A_x, A_y,0.925]]#10 POINT
             trajA_FINISH=[ [A_x, A_y,0.925], [A_x, A_y,1.1]]
 
-            all_traj=[start_point, [B_x, B_y, 0.95],[B_x, B_y,0.87],[B_x, B_y,0.98], [A_x, A_y,0.98],[A_x, A_y,0.9],[A_x, A_y,1.05],[C_x, C_y, 0.95], [C_x, C_y, 0.87], [C_x, C_y, 1.1], [A_x, A_y,1.0], [A_x, A_y,0.93]]
+            all_traj=[start_point, [B_x, B_y, 0.95], [B_x, B_y, 0.87],
+                      [B_x, B_y, 0.98], [A_x, A_y, 0.98], [A_x, A_y,0.9],
+                      [A_x, A_y, 1.05], [C_x, C_y, 0.95], [C_x, C_y, 0.87],
+                      [C_x, C_y, 1.1], [A_x, A_y, 1.0], [A_x, A_y, 0.93]]
             # all_traj=[start_point, [B_x, B_y, 0.95],[B_x, B_y,0.87],[B_x, B_y,0.98], [A_x, A_y,0.98],[A_x, A_y,0.885],[A_x, A_y,1.05],[C_x, C_y, 0.95], [C_x, C_y, 0.87], [C_x, C_y, 1.1], [A_x, A_y,1.0], [A_x, A_y,0.90]]
 
             #all_traj=[start_point, [B_x, B_y,0.88],[A_x, A_y,0.91],[C_x, C_y, 0.88],  [A_x, A_y,0.94]]
@@ -1352,7 +1358,7 @@ class UserComm():
             self.move_point('point1', A_x, A_y, ABC[0][2])
             self.move_point('point2', ABC[1][0], ABC[1][1], ABC[1][2])
             self.move_point('point3', ABC[2][0], ABC[2][1], ABC[2][2])
-            brakepoints=[viapoints[2],viapoints[5],viapoints[8],viapoints[11]]
+            brakepoints=[viapoints[2], viapoints[5], viapoints[8], viapoints[11]]
             print("brakepoints", brakepoints)
 
             indexes = self.find_closest_indices(allsampled,brakepoints)
@@ -1366,11 +1372,10 @@ class UserComm():
             
             self.pprint("Going to initial pose...")
             # self.request_setdesqT(1, allsampled[0:9,0])   #command torso also  
-            self.wait_until_reach(1, allsampled[0:10,0], SEC=12)
+            self.wait_until_reach(1, allsampled[0:10,0], SEC=12) #AMZ: Check this function or the upper?
 
             curretn_obs.append([0,  allsampled[2:9, 0], ABC[0], ABC[1], ABC[2], one_hot])
-
-            time.sleep(2.0)
+            time.sleep(1.0)
 
             # Capture and save image for timestep 0 (overhead camera)
             img = self.get_current_image()
@@ -1844,7 +1849,7 @@ class UserComm():
         for lst2 in list2:
             min_distance = float('inf')
             closest_index = -1
-            for i in range(prev+1, 150): #150? CHECKAMZ
+            for i in range(prev+1, 150): #AMZ: Check 150?
                 distance = np.linalg.norm(np.array(list1[0:10, i]) - np.array(lst2))
                 
                 if distance < min_distance:
@@ -2598,7 +2603,8 @@ class UserComm():
         sample_list= np.asarray(sample_list)
         return sample_list
     
-    def spline_fit_viapoints_linear_2(self,viapoint_array, sample_N):
+    
+    def spline_fit_viapoints_linear_2(self, viapoint_array, sample_N):
         '''
         viapoint_array shape: (n, 10) (numpy)
         return (10, sample_N)
@@ -2625,6 +2631,7 @@ class UserComm():
 
         sample_list = np.asarray(sample_list)
         return sample_list
+    
     # def spline_fit_viapoints_mixed(self,viapoint_array, sample_N):
     #     '''
     #     viapoint_array shape: (n, 10) (numpy)

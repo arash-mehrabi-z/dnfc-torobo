@@ -216,21 +216,29 @@ def online_test(tester:Tester, eps_num, use_baseline):
     traj_step_size = 900
 
     elem = tester.dataset[eps_num]
-    state = torch.tensor(elem[0][step_size : 
+    # Initial state from dataset is NORMALIZED
+    state_normalized = torch.tensor(elem[0][step_size :
                                  step_size + state_size].tolist()
-                                 ).to(device)
-    
+                                 ).to(device).float()
+
+    # Denormalize to get real state for robot control
+    state_real = state_normalized * state_std + state_mean
+
     # milestones = tester.get_changes_indexes(eps_num)
-    one_hot = elem[0][step_size+state_size+target_size : 
+    one_hot = elem[0][step_size+state_size+target_size :
                       step_size+state_size+target_size+onehot_size].tolist()
-    goal = elem[0][step_size+state_size : 
+    # goal contains NORMALIZED coordinates from the preprocessed dataset
+    goal_normalized = elem[0][step_size+state_size :
                    step_size+state_size+target_size].tolist()
-    
+
+    # Denormalize coordinates for physical object positioning
+    goal_real = (np.array(goal_normalized) * xy_std) + xy_mean
+
     # 6D coordinates: x,y for 3 objects (z is fixed at 0.865)
     z_fixed = 0.865
-    obstA = torch.tensor([goal[0], goal[1], z_fixed])
-    obstB = torch.tensor([goal[2], goal[3], z_fixed])
-    obstC = torch.tensor([goal[4], goal[5], z_fixed])
+    obstA = torch.tensor([goal_real[0], goal_real[1], z_fixed])
+    obstB = torch.tensor([goal_real[2], goal_real[3], z_fixed])
+    obstC = torch.tensor([goal_real[4], goal_real[5], z_fixed])
     grepB = [obstB[0], obstB[1], 0.87]
     putB = [obstA[0], obstA[1], 0.9]
     grepC = [obstC[0], obstC[1], 0.87]
@@ -244,7 +252,8 @@ def online_test(tester:Tester, eps_num, use_baseline):
     comm.move('point1', obstA)
     comm.move('point2', obstB)
     comm.move('point3', obstC)
-    comm.create_and_pub_msg(state[:7])
+    # Send REAL (denormalized) joint positions to robot
+    comm.create_and_pub_msg(state_real[:7])
     rospy.sleep(5)
 
     # all_trajs_point = 0
@@ -253,65 +262,79 @@ def online_test(tester:Tester, eps_num, use_baseline):
     all_joints = []
     latent_reps = []
     all_states = []
+
+    # Set model to eval mode once before the loop
+    if use_baseline:
+        tester.baseline.eval()
+    else:
+        tester.model.eval()
+
     for i in range(traj_step_size):
         comm.which('\n dnfc in on step'+str(i)+'\n')
 
-        goal_tensor = torch.tensor(goal+one_hot).to(device)
+        # Model receives NORMALIZED goal and state
+        goal_tensor = torch.tensor(goal_normalized).to(device).float()
         goal_nn = torch.unsqueeze(goal_tensor, 0)
-        state_nn = torch.unsqueeze(state, 0)
-        # delta = torch.tensor(elem[i][step_size + state_size + target_size + onehot_size: step_size + state_size + target_size + onehot_size + joint_size ].tolist())
-        if use_baseline:
-            basel_input = torch.cat((goal_nn, state_nn), dim=1)
-            tester.baseline.eval()
-            velocities_tensor = tester.baseline(basel_input)
-        else:
-            tester.model.eval()
-            velocities_tensor, x_des, _ = tester.model(goal_nn, state_nn)
-            x_des = torch.squeeze(x_des, 0)
-            latent_reps.append(x_des.tolist())
+        state_nn = torch.unsqueeze(state_normalized, 0).float()
+        touch_history = torch.tensor([one_hot]).to(device).float()
+
+        with torch.no_grad():
+            if use_baseline:
+                basel_input = torch.cat((goal_nn, touch_history, state_nn), dim=1)
+                velocities_tensor = tester.baseline(basel_input)
+            else:
+                velocities_tensor, x_des, _ = tester.model(goal_nn, state_nn, touch_history)
+                x_des = torch.squeeze(x_des, 0)
+                latent_reps.append(x_des.tolist())
 
         velocities_tensor = torch.squeeze(velocities_tensor, 0)
-        state[:7] += (5*velocities_tensor)
+        # Denormalize actions to get real velocities
+        velocities_real = velocities_tensor * action_std
+        # Update real joint positions
+        state_real[:7] += (1 * velocities_real)
 
-        comm.create_and_pub_msg(state[:7])
+        # Send REAL positions to robot
+        comm.create_and_pub_msg(state_real[:7])
         rospy.sleep(0.05)
         comm.jsLock.acquire()
-        js = torch.tensor((list(comm.joint_state))).to(device)
+        js_real = torch.tensor((list(comm.joint_state))).to(device).float()
         comm.jsLock.release()
 
-        # TODO: Calculate velocity better. (!!!)
-        state = torch.cat((js, velocities_tensor), dim=0).to(device)
-        # state = torch.cat((state[:7],velocities_tensor),dim=0)
-        all_joints.append(state[:7])
-        all_states.append(state.tolist())
+        # Update real state (positions from robot, velocities from model output)
+        state_real = torch.cat((js_real, velocities_real), dim=0).to(device)
+        # Normalize state for next iteration's model input
+        state_normalized = (state_real - state_mean) / state_std
 
-        pos = tester.get_end_eff(js.tolist())
-        if one_hot[0]==1:
+        all_joints.append(state_real[:7])
+        all_states.append(state_real.tolist())
+
+        pos = tester.get_end_eff(js_real.tolist())
+        if one_hot[0] == 1:
             pos[2] -= 0.02
             comm.move('point2', pos)
-        elif one_hot[2]==1:
-            pos[2]-= 0.02
+        elif one_hot[2] == 1:
+            pos[2] -= 0.02
             comm.move('point3', pos)
 
-        # state += velocities_tensor
-        if traj_point==0 and tester.close_enough(state, grepB):
+        # Use real state for waypoint checking
+        if traj_point == 0 and tester.close_enough(state_real, grepB):
             traj_point = 1
             one_hot = [1, 0, 0, 0]
             print('here1')
             print(i)
-        elif traj_point==1 and tester.close_enough(state, putB):
+        elif traj_point == 1 and tester.close_enough(state_real, putB):
             traj_point = 2
             one_hot = [0, 1, 0, 0]
             print('here2')
             print(i)
-        elif traj_point==2 and tester.close_enough(state, grepC):
+        elif traj_point == 2 and tester.close_enough(state_real, grepC):
             traj_point = 3
-            one_hot = [0, 0, 1, 0]   
+            one_hot = [0, 0, 1, 0]
             print('here3')
-            print(i)  
-        elif traj_point==3 and tester.close_enough(state, putC):
+            print(i)
+        elif traj_point == 3 and tester.close_enough(state_real, putC):
             traj_point = 4
-            one_hot = [0, 0, 0, 1] 
+            one_hot = [0, 0, 0, 1]
             print('here4')
             print(i)
 
@@ -806,13 +829,19 @@ def plot_results(tester:Tester, coords_dnfc, coords_basel, coords_gtruth,
     target_size = tester.target_size
     onehot_size = tester.onehot_size
 
-    goal = elem[0][step_size+state_size : 
+    # Goal contains NORMALIZED 2D coordinates (x,y for 3 objects)
+    goal_normalized = elem[0][step_size+state_size :
                    step_size+state_size+target_size
                    ].tolist()
 
-    obstA = torch.tensor(goal[0:3])
-    obstB = torch.tensor(goal[3:6])
-    obstC = torch.tensor(goal[6:9])
+    # Denormalize coordinates
+    goal_real = (np.array(goal_normalized) * xy_std) + xy_mean
+
+    # 6D coordinates: x,y for 3 objects (z is fixed at 0.865)
+    z_fixed = 0.865
+    obstA = torch.tensor([goal_real[0], goal_real[1], z_fixed])
+    obstB = torch.tensor([goal_real[2], goal_real[3], z_fixed])
+    obstC = torch.tensor([goal_real[4], goal_real[5], z_fixed])
 
     fig = plt.figure(figsize=(12.8, 9.6))
     ax = fig.add_subplot(111, projection='3d')
@@ -934,10 +963,10 @@ def create_results_dir(params_num):
 tester = Tester()
 kin = TorKin()
 
-use_only_dnfc = False
+use_only_dnfc = True
 use_two_stream = False  # Set to True to use TwoStreamBaseline with images
-use_image = True  # Set to True to use GeneralModel with image at t=0 as target
-epoch_no = 8800 #4000
+use_image = False  # Set to True to use GeneralModel with image at t=0 as target
+epoch_no = 8000 #4000
 train_num = 1
 # Camera topics for front and side cameras
 image_topic_front = '/fixed_camera/image_raw'  # Front camera (head camera)
@@ -1070,10 +1099,11 @@ elif use_two_stream:
         save_list_to_file(all_states_two_stream, results_dir, "all_states_two_stream")
 
 else:
-    # Original testing loop for DNFC and Baseline
-    for model_complexity in ['low', 'medium', 'high', 'xhigh']: #['medium']:
+    # Original testing loop for DNFC and Baseline (use_image=False)
+    rospy.init_node('dnfc_tester')
+    for model_complexity in ['high']:#['low', 'medium', 'high', 'xhigh']:
         # enc_hid, cont_hid, lin_hid, lin_out = config.get_model_dims(model_complexity)
-        tester.load_model(0, 0, config.use_custom_loss, model_complexity)
+        tester.load_model(0, 0, config.use_custom_loss, model_complexity, use_image=False)
         params_num = tester.config.get_params_num(tester.model)
         results_dir = create_results_dir(params_num)
 
@@ -1082,9 +1112,8 @@ else:
         all_latent_reps = []
         for eps_num in range(len(tester.dataset)): #random_idx: #range(27, 110):
             for i_train in range(train_num):
-                tester.load_model(i_train, epoch_no, config.use_custom_loss, model_complexity)
-                rospy.init_node('denz')
-                print('waining for DNFC')
+                tester.load_model(i_train, epoch_no, config.use_custom_loss, model_complexity, use_image=False)
+                print('waiting for DNFC')
                 comm.which('\n\n\n\ndnfc start on path'+str(eps_num)+'\n\n\n\n')
                 all_joints_dnfc, loss_dnfc, latent_reps, states_dnfc = online_test(tester, eps_num, False)
 

@@ -81,35 +81,35 @@ class Tester():
                                       self.joint_size,
                                       enc_hid, cont_hid,
                                       use_image=False)
-            self.baseline = MLPBaseline(self.state_size + (self.target_size+self.onehot_size),
-                                        lin_hid, lin_out,
-                                        self.joint_size)
+            # self.baseline = MLPBaseline(self.state_size + (self.target_size+self.onehot_size),
+            #                             lin_hid, lin_out,
+            #                             self.joint_size)
 
             m = self.model.to(self.device)
             model_name_dnfc = self.config.get_model_name(False, use_custom_loss, False)
             num_params = self.config.get_params_num(m)
             model_name_dnfc += f"|{num_params}K_params"
 
-            m = self.baseline.to(self.device)
-            model_name_base = self.config.get_model_name(True, False, False)
-            num_params = self.config.get_params_num(m)
-            model_name_base += f"|{num_params}K_params"
+            # m = self.baseline.to(self.device)
+            # model_name_base = self.config.get_model_name(True, False, False)
+            # num_params = self.config.get_params_num(m)
+            # model_name_base += f"|{num_params}K_params"
 
             dnfc_adr = f'weights/{self.config.dataset_name}|{self.config.ds_ratio}|{model_name_dnfc}' + \
                 f'/train_no_{train_no}/fbc_{epoch_no}.pth'
-            base_adr = f'weights/{self.config.dataset_name}|{self.config.ds_ratio}|{model_name_base}' + \
-                f'/train_no_{train_no}/fbc_{epoch_no}.pth'
+            # base_adr = f'weights/{self.config.dataset_name}|{self.config.ds_ratio}|{model_name_base}' + \
+            #     f'/train_no_{train_no}/fbc_{epoch_no}.pth'
 
             dnfc_path = os.path.join(self.cur_file_dir_path, dnfc_adr)
-            base_path = os.path.join(self.cur_file_dir_path, base_adr)
+            # base_path = os.path.join(self.cur_file_dir_path, base_adr)
             self.model.load_state_dict(torch.load(dnfc_path,
                                                   map_location=torch.device(self.device),
                                                   weights_only=True))
-            self.baseline.load_state_dict(torch.load(base_path,
-                                                     map_location=torch.device(self.device),
-                                                     weights_only=True))
+            # self.baseline.load_state_dict(torch.load(base_path,
+            #                                          map_location=torch.device(self.device),
+            #                                          weights_only=True))
             print("***\nLoaded model weights from", dnfc_path)
-            print("Loaded baseline weights from", base_path)
+            # print("Loaded baseline weights from", base_path)
         
 
     def load_two_stream_model(self, train_no, epoch_no, model_complexity):
@@ -156,16 +156,22 @@ class Tester():
             self.model.eval()
 
         for i in range(299):
-            input_tensor=torch.tensor(elem[i][self.step_size:self.step_size+self.state_size].tolist())
-            
+            input_tensor = torch.tensor(elem[i][self.step_size:self.step_size+self.state_size].tolist()).float()
+
             # input_tensor=torch.cat((joint_angles_tensor,velocities_tensor),dim=0)
-            goal=elem[i][self.step_size+self.state_size+self.joint_size:].tolist()
-            goal_tensor=torch.tensor(goal)
+            goal = elem[i][self.step_size+self.state_size:self.step_size+self.state_size+self.target_size].tolist()
+            one_hot = elem[i][self.step_size+self.state_size+self.target_size:self.step_size+self.state_size+self.target_size+self.onehot_size].tolist()
+            goal_tensor = torch.tensor(goal).float()
+            goal_nn = torch.unsqueeze(goal_tensor, 0)
+            state_nn = torch.unsqueeze(input_tensor, 0)
+            touch_history = torch.tensor([one_hot]).float()
             if usebaseline:
-                all=torch.cat((goal_tensor, input_tensor),dim=0)
-                velocities_tensor=self.baseline(all)
+                all = torch.cat((goal_nn, touch_history, state_nn), dim=1)
+                velocities_tensor = self.baseline(all)
+                velocities_tensor = torch.squeeze(velocities_tensor, 0)
             else:
-                velocities_tensor=self.model(goal_tensor, input_tensor)[0]
+                velocities_tensor = self.model(goal_nn, state_nn, touch_history)[0]
+                velocities_tensor = torch.squeeze(velocities_tensor, 0)
                 
             y1.append(float(velocities_tensor[0]))
             y2.append(float(velocities_tensor[1]))
@@ -183,9 +189,9 @@ class Tester():
         out = False
         y1, y2, y3, y4, y5, y6, y7 = [], [], [], [], [], [], []
         elem = self.dataset[num]
-        state = torch.tensor(elem[0][self.step_size : 
+        state = torch.tensor(elem[0][self.step_size :
                                      self.step_size+self.state_size].tolist()
-                                     ).to(self.device)
+                                     ).to(self.device).float()
 
         goal = elem[0][self.step_size + self.state_size : 
                        self.step_size + self.state_size + self.target_size].tolist()
@@ -227,14 +233,15 @@ class Tester():
             self.model.eval()
         
         for i in range(self.dataset.shape[1]):
-            goal_tensor = torch.tensor(goal + one_hot).to(self.device)
+            goal_tensor = torch.tensor(goal).to(self.device).float()
             goal_nn = torch.unsqueeze(goal_tensor, 0)
-            state_nn = torch.unsqueeze(state, 0)
+            state_nn = torch.unsqueeze(state, 0).float()
+            touch_history = torch.tensor([one_hot]).to(self.device).float()
             if use_baseline:
-                basel_input = torch.cat((goal_nn, state_nn), dim=1)
+                basel_input = torch.cat((goal_nn, touch_history, state_nn), dim=1)
                 velocities_tensor = self.baseline(basel_input)
             else:
-                velocities_tensor, x_des, _ = self.model(goal_nn, state_nn)
+                velocities_tensor, x_des, _ = self.model(goal_nn, state_nn, touch_history)
 
             velocities_tensor = torch.squeeze(velocities_tensor, 0)
             print_it_out = out
@@ -315,13 +322,18 @@ class Tester():
             self.model.eval()
         
         for i in range(299):
-            goal_tensor=torch.tensor(goal+one_hot)
+            goal_tensor = torch.tensor(goal).float()
+            goal_nn = torch.unsqueeze(goal_tensor, 0)
+            state_nn = torch.unsqueeze(state, 0).float()
+            touch_history = torch.tensor([one_hot]).float()
 
             if usebaseline:
-                all=torch.cat((goal_tensor, state),dim=0)
-                velocities_tensor=self.baseline(all)
+                all = torch.cat((goal_nn, touch_history, state_nn), dim=1)
+                velocities_tensor = self.baseline(all)
+                velocities_tensor = torch.squeeze(velocities_tensor, 0)
             else:
-                velocities_tensor,x_des=self.model(goal_tensor, state)[0:2]
+                velocities_tensor, x_des = self.model(goal_nn, state_nn, touch_history)[0:2]
+                velocities_tensor = torch.squeeze(velocities_tensor, 0)
 
             
             state[:7]+=velocities_tensor

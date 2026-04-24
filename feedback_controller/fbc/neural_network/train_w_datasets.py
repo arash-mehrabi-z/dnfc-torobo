@@ -461,7 +461,7 @@ batch_size = 256
 learning_rate = 3e-4
 validation_interval = 100
 num_trains = 3
-noise_std = 0.1 #0.004
+noise_std = 0.05 #0.004
 
 # Crop parameters for image preprocessing
 crop_params = {

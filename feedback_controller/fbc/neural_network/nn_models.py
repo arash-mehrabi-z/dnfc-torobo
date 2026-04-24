@@ -228,11 +228,13 @@ class GeneralModel(nn.Module):
             # Map CNN latent + one_hot to state space
             combined_dim = cnn_latent + onehot_dim
             self.to_state_space = MLP_2L(combined_dim, 2 * combined_dim, encoded_space_dim)
+            # Controller takes diff (x_des - x)
+            self.mlp_controller = MLP_3L(encoded_space_dim, cont_hid, cont_hid, action_dim)
         else:
             self.enc1 = MLP_2L(target_dim, enc_hid, encoded_space_dim)
+            # Controller takes concatenation of x_des and x
+            self.mlp_controller = MLP_3L(encoded_space_dim * 2, cont_hid, cont_hid, action_dim)
 
-        # Controller (shared for both modes)
-        self.mlp_controller = MLP_3L(encoded_space_dim, cont_hid, cont_hid, action_dim)
         self.mlp_controller.linear[-1].bias.data.fill_(0.0)
 
     def forward(self, target_repr, state, touch_history):
@@ -245,14 +247,18 @@ class GeneralModel(nn.Module):
             combined = torch.cat((cnn_out, touch_history), dim=1)
             # Map to state space (x_des)
             x_des = self.to_state_space(combined)
+            # Controller input is diff
+            diff = x_des - x
+            controller_input = diff
         else:
             # Concatenate coords and touch_history for encoder input
             target_full = torch.cat((target_repr, touch_history), dim=1)
             x_des = self.enc1(target_full)
+            # Controller input is concatenation of x_des and x
+            diff = x_des - x  # Still compute for return value
+            controller_input = torch.cat((x_des, x), dim=1)
 
-        diff = x_des - x
-
-        acts_pred = self.mlp_controller(diff)
+        acts_pred = self.mlp_controller(controller_input)
         # acts_pred = F.tanh(acts_pred)
 
         return acts_pred, x_des, diff
