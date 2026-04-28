@@ -360,7 +360,7 @@ def online_test_image(tester: Tester, eps_num, target_image_capture,
     step_size = tester.step_size
     target_size = tester.target_size
     onehot_size = tester.onehot_size
-    traj_step_size = 900
+    traj_step_size = 180 #900
 
     elem = tester.dataset[eps_num]
     # Initial state from dataset is NORMALIZED
@@ -450,13 +450,13 @@ def online_test_image(tester: Tester, eps_num, target_image_capture,
         touch_history = torch.tensor([one_hot]).to(device).float()
 
         with torch.no_grad():
-            img_for_viz = target_image.squeeze(0).cpu()  # (3, H, W)
-            img_for_viz = img_for_viz.permute(1, 2, 0).numpy()  # (H, W, 3)
-            img_for_viz = (img_for_viz * 255).astype(np.uint8)
-            model_input_img = Image.fromarray(img_for_viz)
-            model_input_img.save(os.path.join(images_dir, f"model_input_image_{i}.jpg"))
-            print(f"Model input image saved - shape: {target_image.shape}, "
-                  f"min: {target_image.min():.3f}, max: {target_image.max():.3f}")
+            # img_for_viz = target_image.squeeze(0).cpu()  # (3, H, W)
+            # img_for_viz = img_for_viz.permute(1, 2, 0).numpy()  # (H, W, 3)
+            # img_for_viz = (img_for_viz * 255).astype(np.uint8)
+            # model_input_img = Image.fromarray(img_for_viz)
+            # model_input_img.save(os.path.join(images_dir, f"model_input_image_{i}.jpg"))
+            # print(f"Model input image saved - shape: {target_image.shape}, "
+            #       f"min: {target_image.min():.3f}, max: {target_image.max():.3f}")
 
             velocities_tensor, x_des, _ = tester.model(
                 target_image, state_nn, touch_history)
@@ -468,11 +468,12 @@ def online_test_image(tester: Tester, eps_num, target_image_capture,
         # Denormalize actions to get real velocities
         velocities_real = velocities_tensor * action_std
         # Update real joint positions
-        state_real[:7] += (3 * velocities_real) #AMZ?
+        state_real[:7] += (5 * velocities_real) #AMZ?
 
         # Send REAL positions to robot
         comm.create_and_pub_msg(state_real[:7])
-        rospy.sleep(0.05)
+        # rospy.sleep(0.05)
+        rospy.sleep(0.2)
         comm.jsLock.acquire()
         js_real = torch.tensor((list(comm.joint_state))).to(device).float()
         comm.jsLock.release()
@@ -965,8 +966,8 @@ kin = TorKin()
 
 use_only_dnfc = True
 use_two_stream = False  # Set to True to use TwoStreamBaseline with images
-use_image = False  # Set to True to use GeneralModel with image at t=0 as target
-epoch_no = 3300 #4000
+use_image = True  # Set to True to use GeneralModel with image at t=0 as target
+epoch_no = 4400 #4000
 train_num = 1
 # Camera topics for front and side cameras
 image_topic_front = '/fixed_camera/image_raw'  # Front camera (head camera)
