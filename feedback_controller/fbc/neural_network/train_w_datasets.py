@@ -301,25 +301,18 @@ def run_test(n):
         batch_state = batch_data[1].to(device).float()
         batch_target_repr = batch_data[2].to(device).float()
 
-        if use_two_stream:
-            batch_images_front = batch_data[3].to(device).float()
-            batch_images_side = batch_data[4].to(device).float()
-            batch_action = batch_data[5].to(device).float()
-        else:
-            # Both use_image=True and use_image=False return:
-            # (step, state, target_repr, touch_history, action)
-            batch_touch_history = batch_data[3].to(device).float()
-            batch_action = batch_data[4].to(device).float()
+        # Both use_image=True and use_image=False return:
+        # (step, state, target_repr, touch_history, action)
+        batch_touch_history = batch_data[3].to(device).float()
+        batch_action = batch_data[4].to(device).float()
 
         model.eval()
         with torch.no_grad():
-            if use_two_stream:
-                batch_action_pred = model(batch_target_repr, batch_images_front, batch_images_side)
-            elif use_baseline:
+            if use_baseline:
                 nn_input = torch.cat((batch_target_repr, batch_state), dim=1)
                 batch_action_pred = model(nn_input)
             else:
-                # GeneralModel: pass target_repr, state, and touch_history
+                # GeneralModel and TwoStreamBaseline: pass target_repr, state, and touch_history
                 batch_action_pred, batch_x_des, batch_diff = model(
                     batch_target_repr, batch_state, batch_touch_history)
 
@@ -453,10 +446,10 @@ action_dim = joints_num
 
 # Training:
 use_baseline = False
-use_image = False  # Set to True to use image at t=0 as target representation
-use_two_stream = False
+use_image = True  # Set to True to use image at t=0 as target representation
+use_two_stream = True
 use_custom_loss = config.use_custom_loss
-num_epochs = 12000 + 1
+num_epochs = 7000 + 1
 batch_size = 256
 learning_rate = 3e-4
 validation_interval = 100
@@ -490,23 +483,12 @@ for model_complexity in ['high']: #'low', 'medium', 'high', 'xhigh']:
         fig_1 = plt.figure(figsize=(12.8, 9.6))
         fig_2 = plt.figure(figsize=(12.8, 9.6))
 
-        model_name = config.get_model_name(use_baseline, use_custom_loss, use_image,
-                                           use_two_stream)
+        model_name = config.get_model_name(use_baseline, use_custom_loss, 
+                                           use_image, use_two_stream)
         
-        if use_two_stream:
-            # Load trajectory mapping from .npz file
-            mapping_file = os.path.join(ds_root_dir, f'traj_mapping_{config.ds_ratio}.npz')
-            mapping = np.load(mapping_file)
-            train_traj_indices = mapping['train_traj_indices']
-            print(f"Loaded trajectory mapping with {len(train_traj_indices)} trajectories")
-            print(f"First five indices are:", train_traj_indices[:5])
-
-            dataset = TwoStreamDataset(ds_root_dir, ds_file_name,
-                                       joints_num, target_dim,
-                                       num_history_images=config.num_history_images,
-                                       image_size=config.image_size,
-                                       traj_indices=train_traj_indices)
-        elif use_image:
+        # Dataset loading depends on use_image, not on use_two_stream
+        # Both GeneralModel and TwoStreamBaseline use TrajectoryDataset
+        if use_image:
             # Load trajectory mapping from .npz file
             mapping_file = os.path.join(ds_root_dir, f'traj_mapping_{config.ds_ratio}.npz')
             mapping = np.load(mapping_file)
@@ -543,18 +525,15 @@ for model_complexity in ['high']: #'low', 'medium', 'high', 'xhigh']:
         print("val_set:", len(val_set))
 
         if use_two_stream:
-            mlp_hidden_1, mlp_hidden_2, mlp_latent, cnn_latent, \
-                decoder_hidden_1, decoder_hidden_2 = \
-                config.get_two_stream_dims(model_complexity)
-            model = TwoStreamBaseline(target_dim=target_dim,
-                                      mlp_hidden_1=mlp_hidden_1,
-                                      mlp_hidden_2=mlp_hidden_2,
-                                      mlp_latent=mlp_latent,
-                                      num_images=config.num_history_images,
+            # TwoStreamBaseline has same interface as GeneralModel
+            model = TwoStreamBaseline(encoded_space_dim=encoded_space_dim,
+                                      target_dim=target_dim,
+                                      action_dim=action_dim,
+                                      enc_hid=enc_hid,
+                                      cont_hid=cont_hid,
+                                      use_image=use_image,
                                       cnn_latent=cnn_latent,
-                                      decoder_hidden_1=decoder_hidden_1,
-                                      decoder_hidden_2=decoder_hidden_2,
-                                      action_dim=action_dim)
+                                      onehot_dim=config.onehot_dim)
         elif use_baseline:
             model = MLPBaseline(inp_dim=encoded_space_dim+target_dim,
                                 lin_hid=lin_hid, lin_out=lin_out,
@@ -633,15 +612,10 @@ for model_complexity in ['high']: #'low', 'medium', 'high', 'xhigh']:
                 batch_state = batch_data[1].to(device).float()
                 batch_target_repr = batch_data[2].to(device).float()
 
-                if use_two_stream:
-                    batch_images_front = batch_data[3].to(device).float()
-                    batch_images_side = batch_data[4].to(device).float()
-                    batch_action = batch_data[5].to(device).float()
-                else:
-                    # Both use_image=True and use_image=False return:
-                    # (step, state, target_repr, touch_history, action)
-                    batch_touch_history = batch_data[3].to(device).float()
-                    batch_action = batch_data[4].to(device).float()
+                # Both use_image=True and use_image=False return:
+                # (step, state, target_repr, touch_history, action)
+                batch_touch_history = batch_data[3].to(device).float()
+                batch_action = batch_data[4].to(device).float()
 
                 batch_noise = torch.normal(mean=0.0, std=noise_std,
                                         size=(batch_state.size()[0], encoded_space_dim)
@@ -670,15 +644,12 @@ for model_complexity in ['high']: #'low', 'medium', 'high', 'xhigh']:
                           f"min: {batch_target_repr.min():.3f}, max: {batch_target_repr.max():.3f}")
 
                 optimizer.zero_grad()
-                if use_two_stream:
-                    batch_action_pred_noise = model(batch_target_repr, batch_images_front, batch_images_side)
-                    batch_action_noise = batch_action
-                elif use_baseline:
+                if use_baseline:
                     nn_input = torch.cat((batch_target_repr, batch_state_noise), dim=1)
                     batch_action_pred_noise = model(nn_input)
                     batch_action_noise = batch_action #- batch_noise[:, :joints_num]
                 else:
-                    # GeneralModel: pass target_repr, state, and touch_history
+                    # GeneralModel and TwoStreamBaseline: pass target_repr, state, and touch_history
                     batch_action_pred_noise, batch_x_des_noise, batch_diff_noise = model(
                         batch_target_repr, batch_state_noise, batch_touch_history)
                     batch_action_noise = batch_action #- batch_noise[:, :joints_num]

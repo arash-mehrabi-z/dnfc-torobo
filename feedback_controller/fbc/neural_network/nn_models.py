@@ -312,23 +312,63 @@ class ImageStackEncoder(nn.Module):
 
 
 class TwoStreamBaseline(nn.Module):
-    def __init__(self, target_dim, mlp_hidden_1, mlp_hidden_2, mlp_latent,
-                 num_images, cnn_latent,
-                 decoder_hidden_1, decoder_hidden_2, action_dim):
-        super().__init__()
-        self.mlp_encoder = MLP_3L(target_dim, mlp_hidden_1, mlp_hidden_2, mlp_latent)
-        # Separate encoder for each camera view
-        self.cnn_encoder_front = ImageStackEncoder(num_images, cnn_latent)
-        self.cnn_encoder_side = ImageStackEncoder(num_images, cnn_latent)
-        # Decoder: mlp_latent + 2 * cnn_latent (one per camera) -> action
-        self.decoder = MLP_3L(mlp_latent + 2 * cnn_latent,
-                              decoder_hidden_1, decoder_hidden_2, action_dim)
-        self.decoder.linear[-1].bias.data.fill_(0.0)
+    """
+    Same structure as GeneralModel but uses concatenation instead of subtraction.
 
-    def forward(self, target_repr, image_stack_front, image_stack_side):
-        mlp_out = self.mlp_encoder(target_repr)
-        cnn_out_front = self.cnn_encoder_front(image_stack_front)
-        cnn_out_side = self.cnn_encoder_side(image_stack_side)
-        combined = torch.cat((mlp_out, cnn_out_front, cnn_out_side), dim=1)
-        action_pred = self.decoder(combined)
-        return action_pred
+    When use_image=True:
+        - target_repr: single image at t=0 (front camera) -> CNN -> cnn_latent
+        - Concatenate touch_history (one-hot, onehot_dim) after CNN
+        - Map to state space (x_des)
+        - state: robot joints + velocities (encoded_space_dim) used directly
+        - Concatenate x_des and state (instead of diff)
+        - Controller predicts action from concatenated input
+
+    When use_image=False:
+        - target_repr: coordinates + one-hot -> MLP encoder -> x_des
+        - state: robot joints + velocities
+        - Concatenate x_des and state
+        - Controller predicts action from concatenated input
+    """
+    def __init__(self, encoded_space_dim, target_dim, action_dim,
+                 enc_hid, cont_hid, use_image, cnn_latent=128, onehot_dim=4):
+        super().__init__()
+        self.use_image = use_image
+
+        if use_image:
+            # CNN encoder for single target image (3 channels RGB)
+            self.cnn_encoder = SingleImageEncoder(cnn_latent)
+            # Map CNN latent + one_hot to state space
+            combined_dim = cnn_latent + onehot_dim
+            self.to_state_space = MLP_2L(combined_dim, 2 * combined_dim, encoded_space_dim)
+            # Controller takes concatenation of x_des and x
+            self.mlp_controller = MLP_3L(encoded_space_dim * 2, cont_hid, cont_hid, action_dim)
+        else:
+            self.enc1 = MLP_2L(target_dim, enc_hid, encoded_space_dim)
+            # Controller takes concatenation of x_des and x
+            self.mlp_controller = MLP_3L(encoded_space_dim * 2, cont_hid, cont_hid, action_dim)
+
+        self.mlp_controller.linear[-1].bias.data.fill_(0.0)
+
+    def forward(self, target_repr, state, touch_history):
+        x = state
+
+        if self.use_image:
+            # target_repr is an image at t=0
+            cnn_out = self.cnn_encoder(target_repr)
+            # Concatenate with touch history (one-hot)
+            combined = torch.cat((cnn_out, touch_history), dim=1)
+            # Map to state space (x_des)
+            x_des = self.to_state_space(combined)
+        else:
+            # Concatenate coords and touch_history for encoder input
+            target_full = torch.cat((target_repr, touch_history), dim=1)
+            x_des = self.enc1(target_full)
+
+        # Controller input is concatenation (not diff like GeneralModel)
+        controller_input = torch.cat((x_des, x), dim=1)
+        acts_pred = self.mlp_controller(controller_input)
+
+        # Compute diff for return value (for loss computation/logging)
+        diff = x_des - x
+
+        return acts_pred, x_des, diff

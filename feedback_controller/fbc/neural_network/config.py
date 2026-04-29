@@ -7,7 +7,7 @@ class Config:
 
         self.v_name = "img_task_enc" #"cart_task_enc_conc" #"2+2l_lat:sub-nvel"
         self.v_name_base = "3l_base" #"4l_base"
-        self.v_name_two_stream = "two_stream_two_encs_combine_latent_base"
+        self.v_name_two_stream = "two_stream_two_encs_concat_latent"
         self.num_history_images = 3
         self.image_size = (128, 128)
 
@@ -37,8 +37,9 @@ class Config:
             model_name = f"cus_los_{self.C}"
             # model_name = f"cus_los_const_mse_st"
         else: model_name = "mse_los"
-        if use_two_stream: model_name += "|tar_cart+img"
-        elif use_image: model_name += "|tar_img_static"
+        if use_two_stream: model_name += "|two_stream_basel"
+        else: pass
+        if use_image: model_name += "|tar_img_static"
         else: model_name += "|tar_cart"
         if use_two_stream: model_name += f"|{self.v_name_two_stream}"
         elif use_baseline: model_name += f"|base|{self.v_name_base}"
@@ -134,7 +135,7 @@ class Config:
             cont_hid = 384
         elif model_complexity == 'high':
             cnn_latent = 128
-            cont_hid = 768
+            cont_hid = 384 * 2
         elif model_complexity == 'xhigh':
             cnn_latent = 256
             cont_hid = 1536
