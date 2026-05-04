@@ -85,15 +85,27 @@ class Tester():
             self.test_traj_indices = np.arange(self.dataset.shape[0])
             print(f"No trajectory mapping found, using 1:1 mapping")
 
+
     def load_model(self, train_no, epoch_no, use_custom_loss, model_complexity,
-                   use_image=False):
+                   use_image=False, use_two_stream=False):
+        """Load GeneralModel or TwoStreamBaseline.
+
+        Args:
+            train_no: Training run number
+            epoch_no: Epoch number to load
+            use_custom_loss: Whether custom loss was used during training
+            model_complexity: Model complexity level ('low', 'medium', 'high', 'xhigh')
+            use_image: If True, use image at t=0 as target. If False, use coordinates.
+            use_two_stream: If True, load TwoStreamBaseline. If False, load GeneralModel.
+        """
+        target_dim = self.target_size + self.onehot_size
+        ModelClass = TwoStreamBaseline if use_two_stream else GeneralModel
 
         if use_image:
-            # Load GeneralModel with image-based target representation
             cnn_latent, cont_hid = self.config.get_image_model_dims(model_complexity)
-            self.model = GeneralModel(
+            model = ModelClass(
                 encoded_space_dim=self.state_size,
-                target_dim=self.target_size + self.onehot_size,
+                target_dim=target_dim,
                 action_dim=self.joint_size,
                 enc_hid=0,
                 cont_hid=cont_hid,
@@ -101,89 +113,39 @@ class Tester():
                 cnn_latent=cnn_latent,
                 onehot_dim=self.onehot_size
             )
-
-            m = self.model.to(self.device)
-            model_name = self.config.get_model_name(False, use_custom_loss, use_image=True)
-            num_params = self.config.get_params_num(m)
-            model_name += f"|{num_params}K_params"
-
-            model_adr = f'weights/{self.config.dataset_name}|{self.config.ds_ratio}|{model_name}' + \
-                f'/train_no_{train_no}/fbc_{epoch_no}.pth'
-            model_path = os.path.join(self.cur_file_dir_path, model_adr)
-            self.model.load_state_dict(torch.load(
-                model_path,
-                map_location=torch.device(self.device),
-                weights_only=True))
-            print("***\nLoaded GeneralModel (use_image=True) weights from", model_path)
         else:
-            enc_hid, cont_hid, lin_hid, lin_out = self.config.get_model_dims(model_complexity)
-            self.model = GeneralModel(self.state_size, self.target_size+self.onehot_size,
-                                      self.joint_size,
-                                      enc_hid, cont_hid,
-                                      use_image=False)
-            # self.baseline = MLPBaseline(self.state_size + (self.target_size+self.onehot_size),
-            #                             lin_hid, lin_out,
-            #                             self.joint_size)
+            enc_hid, cont_hid, _, _ = self.config.get_model_dims(model_complexity)
+            model = ModelClass(
+                encoded_space_dim=self.state_size,
+                target_dim=target_dim,
+                action_dim=self.joint_size,
+                enc_hid=enc_hid,
+                cont_hid=cont_hid,
+                use_image=False,
+                onehot_dim=self.onehot_size
+            )
 
-            m = self.model.to(self.device)
-            model_name_dnfc = self.config.get_model_name(False, use_custom_loss, False)
-            num_params = self.config.get_params_num(m)
-            model_name_dnfc += f"|{num_params}K_params"
-
-            # m = self.baseline.to(self.device)
-            # model_name_base = self.config.get_model_name(True, False, False)
-            # num_params = self.config.get_params_num(m)
-            # model_name_base += f"|{num_params}K_params"
-
-            dnfc_adr = f'weights/{self.config.dataset_name}|{self.config.ds_ratio}|{model_name_dnfc}' + \
-                f'/train_no_{train_no}/fbc_{epoch_no}.pth'
-            # base_adr = f'weights/{self.config.dataset_name}|{self.config.ds_ratio}|{model_name_base}' + \
-            #     f'/train_no_{train_no}/fbc_{epoch_no}.pth'
-
-            dnfc_path = os.path.join(self.cur_file_dir_path, dnfc_adr)
-            # base_path = os.path.join(self.cur_file_dir_path, base_adr)
-            self.model.load_state_dict(torch.load(dnfc_path,
-                                                  map_location=torch.device(self.device),
-                                                  weights_only=True))
-            # self.baseline.load_state_dict(torch.load(base_path,
-            #                                          map_location=torch.device(self.device),
-            #                                          weights_only=True))
-            print("***\nLoaded model weights from", dnfc_path)
-            # print("Loaded baseline weights from", base_path)
-        
-
-    def load_two_stream_model(self, train_no, epoch_no, model_complexity):
-        mlp_hidden_1, mlp_hidden_2, mlp_latent, cnn_latent, \
-            decoder_hidden_1, decoder_hidden_2 = \
-            self.config.get_two_stream_dims(model_complexity)
-
-        target_dim = self.target_size + self.onehot_size
-        self.two_stream_model = TwoStreamBaseline(
-            target_dim=target_dim,
-            mlp_hidden_1=mlp_hidden_1,
-            mlp_hidden_2=mlp_hidden_2,
-            mlp_latent=mlp_latent,
-            num_images=self.config.num_history_images,
-            cnn_latent=cnn_latent,
-            decoder_hidden_1=decoder_hidden_1,
-            decoder_hidden_2=decoder_hidden_2,
-            action_dim=self.joint_size
-        )
-
-        m = self.two_stream_model.to(self.device)
-        model_name = self.config.get_model_name(False, False, False, use_two_stream=True)
+        m = model.to(self.device)
+        model_name = self.config.get_model_name(False, use_custom_loss, use_image,
+                                                 use_two_stream=use_two_stream)
         num_params = self.config.get_params_num(m)
         model_name += f"|{num_params}K_params"
 
         model_adr = f'weights/{self.config.dataset_name}|{self.config.ds_ratio}|{model_name}' + \
             f'/train_no_{train_no}/fbc_{epoch_no}.pth'
-
         model_path = os.path.join(self.cur_file_dir_path, model_adr)
-        self.two_stream_model.load_state_dict(torch.load(
+        model.load_state_dict(torch.load(
             model_path,
             map_location=torch.device(self.device),
             weights_only=True))
-        print("***\nLoaded TwoStreamBaseline weights from", model_path)
+
+        # Store model in appropriate attribute
+        if use_two_stream:
+            self.two_stream_model = model
+            print(f"***\nLoaded TwoStreamBaseline weights from {model_path}")
+        else:
+            self.model = model
+            print(f"***\nLoaded GeneralModel weights from {model_path}")
 
 
     def get_delta_ang_offline(self,usebaseline,num):
@@ -223,7 +185,7 @@ class Tester():
 
 
         return y1,y2,y3,y4,y5,y6,y7
-    
+
 
     def get_emulated(self, use_baseline, num, use_angle=False, return_path_point=False,
                       use_image=False):
@@ -373,7 +335,7 @@ class Tester():
             return y1, y2, y3, y4, y5, y6, y7, path_point
         else:
             return y1, y2, y3, y4, y5, y6, y7
-        
+
 
     def get_emulated_s(self,usebaseline,num,use_angle=False,return_path_point=False):
 
@@ -398,7 +360,7 @@ class Tester():
             self.baseline.eval()
         else:
             self.model.eval()
-        
+
         for i in range(self.dataset.shape[1]):
             goal_tensor = torch.tensor(goal).float()
             goal_nn = torch.unsqueeze(goal_tensor, 0)
@@ -430,13 +392,13 @@ class Tester():
                 points.append(self.get_end_eff(x_des))
             elif path_point==2 and self.close_enough(state[:7],milestone_js[2]):
                 path_point=3
-                one_hot=[0,0,1,0]           
+                one_hot=[0,0,1,0]
                 print(x_des)
                 print(self.get_end_eff(x_des))
                 points.append(self.get_end_eff(x_des))
             elif path_point==3 and self.close_enough(state[:7],milestone_js[3]):
                 path_point=4
-                one_hot=[0,0,0,1]   
+                one_hot=[0,0,0,1]
                 print(x_des)
                 print(self.get_end_eff(x_des))
                 points.append(self.get_end_eff(x_des))
@@ -444,7 +406,7 @@ class Tester():
                 add=velocities_tensor
             else:
                 add=state
-                
+
             y1.append(float(add[0]))
             y2.append(float(add[1]))
             y3.append(float(add[2]))
@@ -455,7 +417,7 @@ class Tester():
         return points
 
 
-    
+
     def get_coordinats(self, num, use_baseline, use_image=False):
         y1, y2, y3, y4, y5, y6, y7 = self.get_emulated(use_baseline, num,
                                                        use_angle=False,
@@ -495,7 +457,7 @@ class Tester():
             y6_real.append((delta_pos[5]))
             y7_real.append((delta_pos[6]))
         return y1_real,y2_real,y3_real,y4_real,y5_real,y6_real,y7_real
-    
+
     def get_real_coordinates(self, num):
         y1, y2, y3, y4, y5, y6, y7 = self.get_real_delta_ang(num, False)
         x, y, z = [], [], []
@@ -528,7 +490,7 @@ class Tester():
         # TODO: This shouldn't be mean, it should be sum.
         dist = np.linalg.norm(p1-p2)
         # print(p1, p2, dist)
-        # if (self.criterion_mse(torch.tensor(p1), torch.tensor(p2))**0.5) <= 0.0001: 
+        # if (self.criterion_mse(torch.tensor(p1), torch.tensor(p2))**0.5) <= 0.0001:
         if dist <= 0.02: #0.015:
             return True
         return False
@@ -556,7 +518,7 @@ class Tester():
         for num in range(self.dataset.shape[0]):
             loss=0
             real_output=self.get_real_delta_ang(num,True)
-            if option=='emulated':    
+            if option=='emulated':
                 network_output=self.get_emulated(use_baseline,num,True)
             else:
                 network_output=self.get_delta_ang_offline(use_baseline,num)
@@ -588,7 +550,7 @@ class Tester():
                                                use_angle=False,
                                                return_path_point=True,
                                                use_image=use_image)[7]
-        return point_reached/(4*self.dataset.shape[0])   
+        return point_reached/(4*self.dataset.shape[0])
 
     def get_end_eff(self, js):
         my_l = [0, 0]
@@ -596,14 +558,14 @@ class Tester():
             my_l.append(float(j))
         p1, R = self.kin.forwardkin(1, np.array(my_l))
         return p1
-    
+
     def get_one_hot(self,num,i):
         return self.dataset[num][i][self.step_size + self.state_size + self.target_size : self.step_size + self.state_size + self.target_size+self.onehot_size].tolist()
-    
+
 
     def get_goal(self,num,i):
         return self.dataset[num][i][self.step_size + self.state_size : self.step_size + self.state_size + self.target_size ].tolist()
-    
+
     def get_state(self,num,i):
         return self.dataset[num][i][self.step_size : self.step_size + self.state_size ].tolist()
 
@@ -611,8 +573,7 @@ class Tester():
         return self.dataset[num][i][self.step_size + self.state_size + self.target_size+self.onehot_size : self.step_size + self.state_size + self.target_size+self.onehot_size + self.joint_size ].tolist()
     def get_target(self,num, i):
         return self.dataset[num][i][self.step_size + self.state_size : self.step_size + self.state_size + self.target_size+self.onehot_size ].tolist()
-   
-    
+
 
 
 
