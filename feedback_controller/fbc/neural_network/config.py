@@ -5,7 +5,7 @@ class Config:
         self.num_steps = 299
         self.C = 1e-5
 
-        self.v_name = "img_task_enc" #"cart_task_enc_conc" #"2+2l_lat:sub-nvel"
+        self.v_name = "img_task_enc_rob_enc" #"cart_task_enc_conc" #"2+2l_lat:sub-nvel"
         self.v_name_base = "3l_base" #"4l_base"
         self.v_name_two_stream = "two_stream_two_encs_concat_latent"
         self.num_history_images = 3
@@ -26,6 +26,7 @@ class Config:
         self.coords_dim = 3 * 2 #3*3
         self.action_dim = self.joints_num
         self.onehot_dim = 4
+        self.ee_pose_dim = 7  # 3 position + 4 quaternion
 
         # self.num_params = 24.085 #6.037 #36.117
         # self.num_params_base = 24.091 #6.039 #36.109
@@ -130,16 +131,20 @@ class Config:
         if model_complexity == 'low':
             cnn_latent = 64
             cont_hid = 192
+            pose_enc_hid = 32
         elif model_complexity == 'medium':
             cnn_latent = 128
             cont_hid = 384
+            pose_enc_hid = 64
         elif model_complexity == 'high':
             cnn_latent = 128
             cont_hid = 384 * 2
+            pose_enc_hid = 64
         elif model_complexity == 'xhigh':
             cnn_latent = 256
             cont_hid = 1536
+            pose_enc_hid = 128
         else:
             raise Exception("Model complexity is not defined.")
 
-        return cnn_latent, cont_hid
+        return cnn_latent, cont_hid, pose_enc_hid

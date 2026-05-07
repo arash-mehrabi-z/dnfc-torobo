@@ -33,7 +33,7 @@ from config import Config
 class TrajectoryDataset(Dataset):
     def __init__(self, ds_root_dir, file_name,
                  joint_dim, use_image=False,
-                 coords_dim=6, onehot_dim=4,
+                 coords_dim=6, onehot_dim=4, ee_pose_dim=7,
                  image_size=(128, 128), traj_indices=None,
                  crop_params=None):
         """
@@ -44,6 +44,7 @@ class TrajectoryDataset(Dataset):
             use_image: If True, use image at step 0 as target representation
             coords_dim: Dimension of coordinates (6 for x,y of 3 objects)
             onehot_dim: Dimension of one-hot touch history (4)
+            ee_pose_dim: Dimension of end-effector pose (7: 3 pos + 4 quat)
             image_size: Resize images to this size after cropping
             traj_indices: Array mapping dataset trajectory index to original
                          trajectory folder number. If None, assumes 1:1 mapping.
@@ -53,6 +54,7 @@ class TrajectoryDataset(Dataset):
         self.state_dim = 2 * joint_dim
         self.coords_dim = coords_dim
         self.onehot_dim = onehot_dim
+        self.ee_pose_dim = ee_pose_dim
         self.target_dim = coords_dim + onehot_dim
         self.ds_root_dir = ds_root_dir
         self.use_image = use_image
@@ -121,7 +123,19 @@ class TrajectoryDataset(Dataset):
             onehot_end = onehot_start + self.onehot_dim
             touch_history = self.trajectories[traj_no, step_no, onehot_start:onehot_end]
 
-            return step, state, target_image, touch_history, action
+            # End-effector poses: current (t) and previous (t-1)
+            ee_pose_start = onehot_end
+            ee_pose_end = ee_pose_start + self.ee_pose_dim
+            ee_pose_current = self.trajectories[traj_no, step_no, ee_pose_start:ee_pose_end]
+
+            # Get previous pose (use current pose if at step 0)
+            prev_step_no = max(0, step_no - 1)
+            ee_pose_prev = self.trajectories[traj_no, prev_step_no, ee_pose_start:ee_pose_end]
+
+            # Concatenate: [pose_prev, pose_current] -> 14 dims
+            ee_poses = np.concatenate([ee_pose_prev, ee_pose_current])
+
+            return step, state, target_image, touch_history, ee_poses, action
         else:
             # Coordinates (target representation)
             coords_start = 1 + self.state_dim
@@ -301,10 +315,12 @@ def run_test(n):
         batch_state = batch_data[1].to(device).float()
         batch_target_repr = batch_data[2].to(device).float()
 
-        # Both use_image=True and use_image=False return:
-        # (step, state, target_repr, touch_history, action)
+        # use_image=True returns:
+        # (step, state, target_repr, touch_history, ee_poses, action)
+        # ee_poses contains two consecutive poses: [pose_prev, pose_current] (14 dims)
         batch_touch_history = batch_data[3].to(device).float()
-        batch_action = batch_data[4].to(device).float()
+        batch_ee_poses = batch_data[4].to(device).float()
+        batch_action = batch_data[5].to(device).float()
 
         model.eval()
         with torch.no_grad():
@@ -312,13 +328,15 @@ def run_test(n):
                 nn_input = torch.cat((batch_target_repr, batch_state), dim=1)
                 batch_action_pred = model(nn_input)
             else:
-                # GeneralModel and TwoStreamBaseline: pass target_repr, state, and touch_history
+                # GeneralModel: pass target_repr, ee_poses, and touch_history
                 batch_action_pred, batch_x_des, batch_diff = model(
-                    batch_target_repr, batch_state, batch_touch_history)
+                    batch_target_repr, batch_ee_poses, batch_touch_history)
 
         if use_custom_loss:
+            # Use current pose (second half of ee_poses) for custom loss
+            batch_ee_pose_current = batch_ee_poses[:, config.ee_pose_dim:]
             loss_custom, loss_torques = criterion(batch_action_pred, batch_action,
-                                                batch_x_des, batch_state)
+                                                batch_x_des, batch_ee_pose_current)
         else:
             loss_torques = criterion(batch_action_pred, batch_action)
             loss_custom = loss_torques
@@ -447,7 +465,7 @@ action_dim = joints_num
 # Training:
 use_baseline = False
 use_image = True  # Set to True to use image at t=0 as target representation
-use_two_stream = True
+use_two_stream = False
 use_custom_loss = config.use_custom_loss
 num_epochs = 7000 + 1
 batch_size = 256
@@ -475,9 +493,10 @@ for i in range(7):
 for model_complexity in ['high']: #'low', 'medium', 'high', 'xhigh']:
     enc_hid, cont_hid, lin_hid, lin_out = config.get_model_dims(model_complexity)
     if use_image:
-        cnn_latent, cont_hid = config.get_image_model_dims(model_complexity)
+        cnn_latent, cont_hid, pose_enc_hid = config.get_image_model_dims(model_complexity)
     else:
         cnn_latent = None  # Not used when use_image=False
+        pose_enc_hid = None
     
     for i_train in range(num_trains):
         fig_1 = plt.figure(figsize=(12.8, 9.6))
@@ -500,6 +519,7 @@ for model_complexity in ['high']: #'low', 'medium', 'high', 'xhigh']:
                                         joints_num, use_image=True,
                                         coords_dim=config.coords_dim,
                                         onehot_dim=config.onehot_dim,
+                                        ee_pose_dim=config.ee_pose_dim,
                                         image_size=config.image_size,
                                         traj_indices=train_traj_indices,
                                         crop_params=crop_params)
@@ -539,11 +559,12 @@ for model_complexity in ['high']: #'low', 'medium', 'high', 'xhigh']:
                                 lin_hid=lin_hid, lin_out=lin_out,
                                 out_dim=action_dim)
         else:
-            # GeneralModel with use_image=True uses CNN encoder + touch_history
+            # GeneralModel with use_image=True uses CNN encoder + ee_pose encoder
             model = GeneralModel(encoded_space_dim=encoded_space_dim, target_dim=target_dim,
                                  enc_hid=enc_hid, cont_hid=cont_hid,
                                  action_dim=action_dim, use_image=use_image,
-                                 cnn_latent=cnn_latent, onehot_dim=config.onehot_dim)
+                                 cnn_latent=cnn_latent, onehot_dim=config.onehot_dim,
+                                 ee_pose_dim=config.ee_pose_dim, pose_enc_hid=pose_enc_hid)
         m = model.to(device)
         num_params = sum(p.numel() for p in m.parameters())/1e3
         model_name += f"|{num_params}K_params"
@@ -612,15 +633,17 @@ for model_complexity in ['high']: #'low', 'medium', 'high', 'xhigh']:
                 batch_state = batch_data[1].to(device).float()
                 batch_target_repr = batch_data[2].to(device).float()
 
-                # Both use_image=True and use_image=False return:
-                # (step, state, target_repr, touch_history, action)
+                # use_image=True returns:
+                # (step, state, target_repr, touch_history, ee_poses, action)
+                # ee_poses contains two consecutive poses: [pose_prev, pose_current] (14 dims)
                 batch_touch_history = batch_data[3].to(device).float()
-                batch_action = batch_data[4].to(device).float()
+                batch_ee_poses = batch_data[4].to(device).float()
+                batch_action = batch_data[5].to(device).float()
 
                 batch_noise = torch.normal(mean=0.0, std=noise_std,
-                                        size=(batch_state.size()[0], encoded_space_dim)
+                                        size=(batch_ee_poses.size()[0], config.ee_pose_dim * 2)
                                         ).to(device).float()
-                batch_state_noise = batch_state + batch_noise #AMZ
+                batch_ee_poses_noise = batch_ee_poses + batch_noise
 
                 # Visualize image just before feeding to model (only once: first batch, first epoch)
                 if n == 0 and i == 0 and use_image:
@@ -645,20 +668,22 @@ for model_complexity in ['high']: #'low', 'medium', 'high', 'xhigh']:
 
                 optimizer.zero_grad()
                 if use_baseline:
-                    nn_input = torch.cat((batch_target_repr, batch_state_noise), dim=1)
+                    nn_input = torch.cat((batch_target_repr, batch_state), dim=1)
                     batch_action_pred_noise = model(nn_input)
-                    batch_action_noise = batch_action #- batch_noise[:, :joints_num]
+                    batch_action_noise = batch_action
                 else:
-                    # GeneralModel and TwoStreamBaseline: pass target_repr, state, and touch_history
+                    # GeneralModel: pass target_repr, ee_poses (with noise), and touch_history
                     batch_action_pred_noise, batch_x_des_noise, batch_diff_noise = model(
-                        batch_target_repr, batch_state_noise, batch_touch_history)
-                    batch_action_noise = batch_action #- batch_noise[:, :joints_num]
+                        batch_target_repr, batch_ee_poses_noise, batch_touch_history)
+                    batch_action_noise = batch_action
 
                 if use_custom_loss:
-                    # loss_custom, loss_torques = criterion(batch_action_pred_noise, batch_action_noise, 
-                    #                                       batch_x_des_noise, batch_state, batch_step)
-                    loss_custom, loss_torques = criterion(batch_action_pred_noise, batch_action_noise, 
-                                                        batch_x_des_noise, batch_state)
+                    # loss_custom, loss_torques = criterion(batch_action_pred_noise, batch_action_noise,
+                    #                                       batch_x_des_noise, batch_ee_poses, batch_step)
+                    # Use current pose (second half of ee_poses) for custom loss
+                    batch_ee_pose_current = batch_ee_poses[:, config.ee_pose_dim:]
+                    loss_custom, loss_torques = criterion(batch_action_pred_noise, batch_action_noise,
+                                                        batch_x_des_noise, batch_ee_pose_current)
                 else:
                     loss_torques = criterion(batch_action_pred_noise, batch_action_noise)
                     loss_custom = loss_torques

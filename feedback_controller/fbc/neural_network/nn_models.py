@@ -206,60 +206,67 @@ class GeneralModel(nn.Module):
     When use_image=True:
         - target_repr: single image at t=0 (front camera) -> CNN -> cnn_latent
         - Concatenate touch_history (one-hot, onehot_dim) after CNN
-        - Map to state space (x_des)
-        - state: robot joints + velocities (encoded_space_dim) used directly
-        - diff = x_des - state
+        - Map to latent space (x_des)
+        - ee_poses: two consecutive poses (t-1, t), each position (3) + quaternion (4)
+          -> concatenated (14 dims) -> MLP_3L encoder -> x_encoded
+        - diff = x_des - x_encoded
         - Controller predicts action from diff
 
     When use_image=False:
         - target_repr: coordinates + one-hot -> MLP encoder -> x_des
-        - state: robot joints + velocities
-        - diff = x_des - state
+        - ee_poses: two consecutive poses -> MLP_3L encoder -> x_encoded
+        - diff = x_des - x_encoded
         - Controller predicts action from diff
     """
     def __init__(self, encoded_space_dim, target_dim, action_dim,
-                 enc_hid, cont_hid, use_image, cnn_latent=128, onehot_dim=4):
+                 enc_hid, cont_hid, use_image, cnn_latent=128, onehot_dim=4,
+                 ee_pose_dim=7, pose_enc_hid=64, num_poses=2):
         super().__init__()
         self.use_image = use_image
+        self.num_poses = num_poses
+
+        # Encoder for consecutive end-effector poses (num_poses * 7 dimensions)
+        pose_input_dim = ee_pose_dim * num_poses
+        self.ee_pose_encoder = MLP_3L(pose_input_dim, pose_enc_hid, pose_enc_hid, encoded_space_dim)
 
         if use_image:
             # CNN encoder for single target image (3 channels RGB)
             self.cnn_encoder = SingleImageEncoder(cnn_latent)
-            # Map CNN latent + one_hot to state space
+            # Map CNN latent + one_hot to latent space
             combined_dim = cnn_latent + onehot_dim
             self.to_state_space = MLP_2L(combined_dim, 2 * combined_dim, encoded_space_dim)
-            # Controller takes diff (x_des - x)
+            # Controller takes diff (x_des - x_encoded)
             self.mlp_controller = MLP_3L(encoded_space_dim, cont_hid, cont_hid, action_dim)
         else:
             self.enc1 = MLP_2L(target_dim, enc_hid, encoded_space_dim)
-            # Controller takes concatenation of x_des and x
+            # Controller takes concatenation of x_des and x_encoded
             self.mlp_controller = MLP_3L(encoded_space_dim * 2, cont_hid, cont_hid, action_dim)
 
         self.mlp_controller.linear[-1].bias.data.fill_(0.0)
 
-    def forward(self, target_repr, state, touch_history):
-        x = state
+    def forward(self, target_repr, ee_poses, touch_history):
+        # Encode consecutive end-effector poses (concatenated: [pose_t-1, pose_t])
+        x_encoded = self.ee_pose_encoder(ee_poses)
 
         if self.use_image:
             # target_repr is an image at t=0
             cnn_out = self.cnn_encoder(target_repr)
             # Concatenate with touch history (one-hot)
             combined = torch.cat((cnn_out, touch_history), dim=1)
-            # Map to state space (x_des)
+            # Map to latent space (x_des)
             x_des = self.to_state_space(combined)
             # Controller input is diff
-            diff = x_des - x
+            diff = x_des - x_encoded
             controller_input = diff
         else:
             # Concatenate coords and touch_history for encoder input
             target_full = torch.cat((target_repr, touch_history), dim=1)
             x_des = self.enc1(target_full)
-            # Controller input is concatenation of x_des and x
-            diff = x_des - x  # Still compute for return value
-            controller_input = torch.cat((x_des, x), dim=1)
+            # Controller input is concatenation of x_des and x_encoded
+            diff = x_des - x_encoded  # Still compute for return value
+            controller_input = torch.cat((x_des, x_encoded), dim=1)
 
         acts_pred = self.mlp_controller(controller_input)
-        # acts_pred = F.tanh(acts_pred)
 
         return acts_pred, x_des, diff
     
