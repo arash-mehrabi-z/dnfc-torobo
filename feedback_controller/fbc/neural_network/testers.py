@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy.spatial.transform import Rotation
 from torkin import TorKin
 import torch
 from nn_models import GeneralModel, MLPBaseline, TwoStreamBaseline
@@ -35,6 +36,9 @@ class Tester():
         self.action_std = torch.tensor(norm_params['action_std'].flatten()).to(self.device).float()
         self.state_mean = torch.tensor(norm_params['state_mean'].flatten()).to(self.device).float()
         self.state_std = torch.tensor(norm_params['state_std'].flatten()).to(self.device).float()
+        # ee_pose normalization (only position is normalized)
+        self.ee_pose_pos_mean = torch.tensor(norm_params['ee_pos_mean'].flatten()).to(self.device).float()
+        self.ee_pose_pos_std = torch.tensor(norm_params['ee_pos_std'].flatten()).to(self.device).float()
         print(f"Loaded normalization params from {norm_params_path}")
 
         dataset_path = os.path.join(self.cur_file_dir_path,
@@ -85,12 +89,32 @@ class Tester():
             self.test_traj_indices = np.arange(self.dataset.shape[0])
             print(f"No trajectory mapping found, using 1:1 mapping")
 
+    def compute_ee_pose(self, joint_positions, torso_values=[0, 0]):
+        """Compute ee_pose (position + quaternion) from joint positions."""
+        q_full = np.concatenate([torso_values, joint_positions])
+        position, R_mat = self.kin.forwardkin(1, q_full)
+        quat = Rotation.from_matrix(R_mat).as_quat()  # [x, y, z, w]
+        return np.concatenate([position, quat])
+
+    def normalize_ee_pose(self, ee_pose):
+        """Normalize ee_pose: normalize position, keep quaternion as-is."""
+        if ee_pose.dim() == 1:
+            position = ee_pose[:3]
+            quaternion = ee_pose[3:]
+            position_normalized = (position - self.ee_pose_pos_mean) / self.ee_pose_pos_std
+            return torch.cat([position_normalized, quaternion])
+        else:
+            position = ee_pose[:, :3]
+            quaternion = ee_pose[:, 3:]
+            position_normalized = (position - self.ee_pose_pos_mean) / self.ee_pose_pos_std
+            return torch.cat([position_normalized, quaternion], dim=1)
+
     def load_model(self, train_no, epoch_no, use_custom_loss, model_complexity,
                    use_image=False):
 
         if use_image:
             # Load GeneralModel with image-based target representation
-            cnn_latent, cont_hid = self.config.get_image_model_dims(model_complexity)
+            cnn_latent, cont_hid, pose_enc_hid = self.config.get_image_model_dims(model_complexity)
             self.model = GeneralModel(
                 encoded_space_dim=self.state_size,
                 target_dim=self.target_size + self.onehot_size,
@@ -99,7 +123,9 @@ class Tester():
                 cont_hid=cont_hid,
                 use_image=True,
                 cnn_latent=cnn_latent,
-                onehot_dim=self.onehot_size
+                onehot_dim=self.onehot_size,
+                ee_pose_dim=self.config.ee_pose_dim,
+                pose_enc_hid=pose_enc_hid
             )
 
             m = self.model.to(self.device)
@@ -250,6 +276,8 @@ class Tester():
 
         # Load target image at step 0 if use_image=True
         target_image = None
+        ee_pose_current = None
+        ee_pose_prev = None
         if use_image:
             original_traj_no = self.test_traj_indices[num]
             img_path = os.path.join(
@@ -259,6 +287,11 @@ class Tester():
             target_image = Image.open(img_path).convert('RGB')
             target_image = self.image_transform(target_image)
             target_image = target_image.unsqueeze(0).to(self.device).float()  # (1, 3, H, W)
+
+            # Compute initial ee_pose from initial joint positions
+            initial_joints = state_real[:7].cpu().numpy()
+            ee_pose_current = torch.tensor(self.compute_ee_pose(initial_joints)).to(self.device).float()
+            ee_pose_prev = ee_pose_current.clone()
 
         milestones = self.get_changes_indexes(num)
 
@@ -295,20 +328,25 @@ class Tester():
 
         for i in range(self.dataset.shape[1]):
             # Model receives NORMALIZED inputs
-            state_nn = torch.unsqueeze(state_normalized, 0).float()
             touch_history = torch.tensor([one_hot]).to(self.device).float()
 
             with torch.no_grad():
                 if use_baseline:
+                    state_nn = torch.unsqueeze(state_normalized, 0).float()
                     goal_tensor = torch.tensor(goal_normalized).to(self.device).float()
                     goal_nn = torch.unsqueeze(goal_tensor, 0)
                     basel_input = torch.cat((goal_nn, touch_history, state_nn), dim=1)
                     velocities_tensor = self.baseline(basel_input)
                 elif use_image:
-                    # Use image as target representation
+                    # Use two consecutive ee_poses (normalized)
+                    ee_pose_prev_norm = self.normalize_ee_pose(ee_pose_prev)
+                    ee_pose_current_norm = self.normalize_ee_pose(ee_pose_current)
+                    ee_poses = torch.cat([ee_pose_prev_norm, ee_pose_current_norm])
+                    ee_poses_nn = torch.unsqueeze(ee_poses, 0).float()
                     velocities_tensor, x_des, _ = self.model(
-                        target_image, state_nn, touch_history)
+                        target_image, ee_poses_nn, touch_history)
                 else:
+                    state_nn = torch.unsqueeze(state_normalized, 0).float()
                     goal_tensor = torch.tensor(goal_normalized).to(self.device).float()
                     goal_nn = torch.unsqueeze(goal_tensor, 0)
                     velocities_tensor, x_des, _ = self.model(goal_nn, state_nn, touch_history)
@@ -322,6 +360,13 @@ class Tester():
             state_real[7:] = velocities_real
             # Re-normalize state for next iteration
             state_normalized = (state_real - self.state_mean) / self.state_std
+
+            # Update ee_poses for next iteration (when use_image=True)
+            if use_image:
+                ee_pose_prev = ee_pose_current.clone()
+                ee_pose_current = torch.tensor(
+                    self.compute_ee_pose(state_real[:7].cpu().numpy())
+                ).to(self.device).float()
 
             print_it_out = out
 

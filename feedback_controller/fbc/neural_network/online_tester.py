@@ -7,6 +7,7 @@ from config import Config
 import socket
 import time
 import numpy as np
+from scipy.spatial.transform import Rotation
 from torkin import TorKin
 from global_defines import TOR
 from threading import Lock
@@ -43,6 +44,59 @@ xy_std = norm_params['xy_std'].flatten()    # (6,)
 action_std = torch.tensor(norm_params['action_std'].flatten()).to(device).float()  # (7,)
 state_mean = torch.tensor(norm_params['state_mean'].flatten()).to(device).float()  # (14,)
 state_std = torch.tensor(norm_params['state_std'].flatten()).to(device).float()    # (14,)
+
+# Load ee_pose normalization parameters (only position is normalized, quaternions are not)
+ee_pose_pos_mean = torch.tensor(norm_params['ee_pos_mean'].flatten()).to(device).float()  # (3,)
+ee_pose_pos_std = torch.tensor(norm_params['ee_pos_std'].flatten()).to(device).float()    # (3,)
+
+
+def compute_ee_pose_from_joints(joint_positions, torkin_instance, torso_values=[0, 0]):
+    """
+    Compute end-effector pose (position + quaternion) from joint positions.
+
+    Args:
+        joint_positions: 7 arm joint values
+        torkin_instance: TorKin instance for forward kinematics
+        torso_values: [torso_j1, torso_j2] values (default: [0, 0])
+
+    Returns:
+        ee_pose: numpy array of shape (7,) - [x, y, z, qx, qy, qz, qw]
+    """
+    # Prepend torso values to arm joints for FK (TorKin expects 9 joints)
+    q_full = np.concatenate([torso_values, joint_positions])
+
+    # Compute forward kinematics
+    position, R_mat = torkin_instance.forwardkin(1, q_full)  # 1 = arm
+
+    # Convert rotation matrix to quaternion (xyzw format, matching preprocessing)
+    quat = Rotation.from_matrix(R_mat).as_quat()  # [x, y, z, w]
+
+    # Combine position and quaternion
+    ee_pose = np.concatenate([position, quat])
+
+    return ee_pose
+
+
+def normalize_ee_pose(ee_pose):
+    """
+    Normalize ee_pose: normalize position, keep quaternion as-is.
+
+    Args:
+        ee_pose: tensor of shape (7,) or (batch, 7) - [x, y, z, qw, qx, qy, qz]
+
+    Returns:
+        normalized ee_pose tensor
+    """
+    if ee_pose.dim() == 1:
+        position = ee_pose[:3]
+        quaternion = ee_pose[3:]
+        position_normalized = (position - ee_pose_pos_mean) / ee_pose_pos_std
+        return torch.cat([position_normalized, quaternion])
+    else:
+        position = ee_pose[:, :3]
+        quaternion = ee_pose[:, 3:]
+        position_normalized = (position - ee_pose_pos_mean) / ee_pose_pos_std
+        return torch.cat([position_normalized, quaternion], dim=1)
 
 
 class ImageBuffer:
@@ -346,7 +400,7 @@ def online_test_image(tester: Tester, eps_num, target_image_capture,
                       results_dir=None, save_every_n_steps=10):
     """Online test using GeneralModel with use_image=True.
 
-    Uses a single target image captured at t=0 and current robot state.
+    Uses a single target image captured at t=0 and two consecutive ee_poses.
 
     Args:
         tester: Tester instance with model loaded
@@ -360,7 +414,7 @@ def online_test_image(tester: Tester, eps_num, target_image_capture,
     step_size = tester.step_size
     target_size = tester.target_size
     onehot_size = tester.onehot_size
-    traj_step_size = 180 #900
+    traj_step_size = 150 #900
 
     elem = tester.dataset[eps_num]
     # Initial state from dataset is NORMALIZED
@@ -370,6 +424,13 @@ def online_test_image(tester: Tester, eps_num, target_image_capture,
 
     # Denormalize to get real state for robot control
     state_real = state_normalized * state_std + state_mean
+
+    # Compute initial ee_pose from initial joint positions
+    initial_joints = state_real[:7].cpu().numpy()
+    ee_pose_current = compute_ee_pose_from_joints(initial_joints, kin)
+    ee_pose_current = torch.tensor(ee_pose_current).to(device).float()
+    # At t=0, previous pose equals current pose
+    ee_pose_prev = ee_pose_current.clone()
 
     one_hot = elem[0][step_size + state_size + target_size:
                       step_size + state_size + target_size + onehot_size].tolist()
@@ -431,7 +492,8 @@ def online_test_image(tester: Tester, eps_num, target_image_capture,
 
     traj_point = 0
     all_joints = []
-    latent_reps = []
+    latent_reps = []  # x_des values
+    all_x_encoded = []  # x_encoded values
     all_states = []
 
     tester.model.eval()
@@ -445,24 +507,23 @@ def online_test_image(tester: Tester, eps_num, target_image_capture,
             rospy.logwarn("Target image not available, skipping step")
             continue
 
-        # Prepare NORMALIZED state for model input
-        state_nn = torch.unsqueeze(state_normalized, 0).float()
+        # Prepare normalized ee_poses for model input
+        # Normalize both poses (position only, quaternion stays as-is)
+        ee_pose_prev_norm = normalize_ee_pose(ee_pose_prev)
+        ee_pose_current_norm = normalize_ee_pose(ee_pose_current)
+        # Concatenate: [pose_prev, pose_current] -> 14 dims
+        ee_poses = torch.cat([ee_pose_prev_norm, ee_pose_current_norm])
+        ee_poses_nn = torch.unsqueeze(ee_poses, 0).float()
         touch_history = torch.tensor([one_hot]).to(device).float()
 
         with torch.no_grad():
-            # img_for_viz = target_image.squeeze(0).cpu()  # (3, H, W)
-            # img_for_viz = img_for_viz.permute(1, 2, 0).numpy()  # (H, W, 3)
-            # img_for_viz = (img_for_viz * 255).astype(np.uint8)
-            # model_input_img = Image.fromarray(img_for_viz)
-            # model_input_img.save(os.path.join(images_dir, f"model_input_image_{i}.jpg"))
-            # print(f"Model input image saved - shape: {target_image.shape}, "
-            #       f"min: {target_image.min():.3f}, max: {target_image.max():.3f}")
-
-            velocities_tensor, x_des, _ = tester.model(
-                target_image, state_nn, touch_history)
+            velocities_tensor, x_des, x_encoded = tester.model(
+                target_image, ee_poses_nn, touch_history)
 
         x_des_squeezed = torch.squeeze(x_des, 0)
+        x_encoded_squeezed = torch.squeeze(x_encoded, 0)
         latent_reps.append(x_des_squeezed.tolist())
+        all_x_encoded.append(x_encoded_squeezed.tolist())
 
         velocities_tensor = torch.squeeze(velocities_tensor, 0)
         # Denormalize actions to get real velocities
@@ -480,8 +541,11 @@ def online_test_image(tester: Tester, eps_num, target_image_capture,
 
         # Update real state (positions from robot, velocities from model output)
         state_real = torch.cat((js_real, velocities_real), dim=0).to(device)
-        # Normalize state for next iteration's model input
-        state_normalized = (state_real - state_mean) / state_std
+
+        # Update ee_poses for next iteration
+        ee_pose_prev = ee_pose_current.clone()
+        ee_pose_current_np = compute_ee_pose_from_joints(js_real.cpu().numpy(), kin)
+        ee_pose_current = torch.tensor(ee_pose_current_np).to(device).float()
 
         all_joints.append(state_real[:7])
         all_states.append(state_real.tolist())
@@ -516,7 +580,51 @@ def online_test_image(tester: Tester, eps_num, target_image_capture,
             print('here4')
             print(i)
 
-    return all_joints, traj_point, latent_reps, all_states
+    # Plot and save x_des vs x_encoded
+    if results_dir is not None and len(latent_reps) > 0 and len(all_x_encoded) > 0:
+        plot_x_des_vs_x_encoded(latent_reps, all_x_encoded, results_dir, eps_num)
+
+    return all_joints, traj_point, latent_reps, all_states, all_x_encoded
+
+
+def plot_x_des_vs_x_encoded(x_des_list, x_encoded_list, results_dir, eps_num):
+    """Plot x_des and x_encoded over time for an episode.
+
+    Args:
+        x_des_list: List of x_des vectors over time
+        x_encoded_list: List of x_encoded vectors over time
+        results_dir: Directory to save plots
+        eps_num: Episode number
+    """
+    # Transpose to get each dimension over time
+    x_des_arr = np.array(x_des_list)      # (T, D)
+    x_encoded_arr = np.array(x_encoded_list)  # (T, D)
+
+    time_steps = np.arange(len(x_des_list))
+    num_dims = x_des_arr.shape[1]
+
+    # Create figure with subplots for each dimension
+    fig, axes = plt.subplots(num_dims, 1, figsize=(12, 2 * num_dims), sharex=True)
+    if num_dims == 1:
+        axes = [axes]
+
+    for dim_idx in range(num_dims):
+        ax = axes[dim_idx]
+        ax.plot(time_steps, x_des_arr[:, dim_idx], 'b-', label='x_des', linewidth=1.5)
+        ax.plot(time_steps, x_encoded_arr[:, dim_idx], 'r--', label='x_encoded', linewidth=1.5)
+        ax.set_ylabel(f'Dim {dim_idx + 1}')
+        if dim_idx == 0:
+            ax.legend(loc='upper right')
+        ax.grid(True, alpha=0.3)
+
+    axes[-1].set_xlabel('Time Steps')
+    fig.suptitle(f'Episode {eps_num}: x_des vs x_encoded')
+    plt.tight_layout()
+
+    plot_path = os.path.join(results_dir, f'x_des_vs_x_encoded_eps_{eps_num}.png')
+    plt.savefig(plot_path, dpi=150)
+    plt.close()
+    print(f"Saved x_des/x_encoded plot to: {plot_path}")
 
 
 def online_test_two_stream(tester: Tester, eps_num, results_dir=None, save_every_n_steps=10):
@@ -1002,15 +1110,16 @@ if use_image:
             writer.writerow(row)
 
         all_states_image_model = []
-        all_latent_reps = []
-        for eps_num in range(len(tester.dataset)):
+        all_latent_reps = []  # x_des
+        all_x_encoded_eps = []  # x_encoded
+        for eps_num in range(7): #len(tester.dataset)):
             for i_train in range(train_num):
                 tester.load_model(i_train, epoch_no, config.use_custom_loss,
                                   model_complexity, use_image=True)
                 print(f'Testing ImageModel on episode {eps_num}, train {i_train}')
                 comm.which(f'\n\n\n\nimage_model start on path {eps_num}\n\n\n\n')
 
-                all_joints_img, loss_img, latent_reps, states_img = online_test_image(
+                all_joints_img, loss_img, latent_reps, states_img, x_encoded_list = online_test_image(
                     tester, eps_num, target_image_capture,
                     results_dir=results_dir, save_every_n_steps=10)
 
@@ -1032,9 +1141,11 @@ if use_image:
 
                 all_states_image_model.append(states_img)
                 all_latent_reps.append(latent_reps)
+                all_x_encoded_eps.append(x_encoded_list)
 
         save_list_to_file(all_states_image_model, results_dir, "all_states_image_model")
         save_list_to_file(all_latent_reps, results_dir, "all_latent_reps")
+        save_list_to_file(all_x_encoded_eps, results_dir, "all_x_encoded")
 
 elif use_two_stream:
     # Initialize ROS node first for image subscription

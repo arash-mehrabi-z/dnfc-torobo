@@ -268,8 +268,8 @@ class GeneralModel(nn.Module):
 
         acts_pred = self.mlp_controller(controller_input)
 
-        return acts_pred, x_des, diff
-    
+        return acts_pred, x_des, x_encoded
+
 
 class MLPBaseline(nn.Module):
     def __init__(self, inp_dim, lin_hid, lin_out, out_dim):

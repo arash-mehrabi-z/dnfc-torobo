@@ -11,7 +11,7 @@ config = Config()
 
 # Model parameters
 model_complexity = 'high'
-epoch_num = 0
+epoch_num = 4400
 use_custom_loss = config.use_custom_loss
 use_image = True  # Use image at t=0 as target representation
 
@@ -25,7 +25,7 @@ num_params = config.get_params_num(t.model)
 ds_name = config.dataset_name
 
 results_dir = os.path.join(cur_file_dir_path,
-                           f'results/{ds_name}_{num_params}K/ep:{epoch_num}/emul')
+                           f'results/{ds_name}_{num_params}K_{config.ds_ratio}/ep:{epoch_num}/image_model_{config.v_name}/emul')
 if not os.path.exists(results_dir):
     os.makedirs(results_dir)
 
