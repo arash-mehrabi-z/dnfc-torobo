@@ -414,7 +414,7 @@ def online_test_image(tester: Tester, eps_num, target_image_capture,
     step_size = tester.step_size
     target_size = tester.target_size
     onehot_size = tester.onehot_size
-    traj_step_size = 150 #900
+    traj_step_size = 300 #150 #900
 
     elem = tester.dataset[eps_num]
     # Initial state from dataset is NORMALIZED
@@ -534,7 +534,14 @@ def online_test_image(tester: Tester, eps_num, target_image_capture,
         # Send REAL positions to robot
         comm.create_and_pub_msg(state_real[:7])
         # rospy.sleep(0.05)
-        rospy.sleep(0.2)
+        # Wait longer on first two timesteps to ensure robot reaches position
+        if i <= 2:
+            # print("Sleeping", i)
+            # rospy.sleep(3.0)
+            rospy.sleep(0.1)
+        else:
+            rospy.sleep(0.1)
+            # rospy.sleep(0.07)
         comm.jsLock.acquire()
         js_real = torch.tensor((list(comm.joint_state))).to(device).float()
         comm.jsLock.release()
@@ -1112,7 +1119,7 @@ if use_image:
         all_states_image_model = []
         all_latent_reps = []  # x_des
         all_x_encoded_eps = []  # x_encoded
-        for eps_num in range(7): #len(tester.dataset)):
+        for eps_num in range(len(tester.dataset)): #3): #
             for i_train in range(train_num):
                 tester.load_model(i_train, epoch_no, config.use_custom_loss,
                                   model_complexity, use_image=True)
