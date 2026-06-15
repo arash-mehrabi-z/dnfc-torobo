@@ -1,0 +1,374 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\setlength{\parskip}{0.5em}
+\setlength{\parindent}{0pt}
+
+% Figures are referenced relative to fbc/neural_network/ (compile from that directory).
+\graphicspath{{bayes/results/}}
+
+\title{Bayesian Last-Layer Uncertainty in a Neural Feedback Controller:\\
+Comparing Random-Walk and Gradient-Aware MCMC}
+\author{Arash Mehrabi}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Learned neural controllers emit a single action per state and give no signal when they operate
+outside their training distribution. We make the final linear layer of a trained 7-DOF feedback
+controller (DNFC) Bayesian and ask how the choice of MCMC sampler shapes the resulting uncertainty.
+On the resulting $\approx\!2.7\times10^{3}$-dimensional last-layer posterior we compare a gradient-free
+random-walk Metropolis--Hastings (RWMH) sampler against gradient-aware stochastic gradient Langevin
+dynamics (SGLD), using split-$\hat R$/ESS diagnostics, a closed-form Gaussian reference posterior, and
+results averaged over five independently trained controllers. RWMH tunes to the optimal $23.4\%$
+acceptance yet fails to mix ($\mathrm{ESS}\approx5$ from $8000$ draws), exactly as its $1/d$ dimension
+scaling predicts; SGLD mixes essentially dimension-independently and is $33\times\!\pm\!15$ more
+efficient per unit of compute. We find that posterior \emph{conditioning}---set by the observation-noise
+scale $\sigma_a$---governs feasibility for both samplers, that tempering does not help (it rescales
+posterior width but not conditioning), and that the predictive uncertainty rises monotonically under
+genuine target perturbation, with SGLD recovering the exact posterior's spread far more faithfully than
+RWMH. The dataset's nominal ``extrapolation'' split, by contrast, is \emph{not} actually
+out-of-distribution (detection AUROC $\approx 0.5$ even for the exact posterior), so we demonstrate the
+shift signal through controlled perturbation instead. The practical takeaway: gradient-aware sampling is
+the better tool for last-layer predictive uncertainty, and conditioning---not the sampler alone---decides
+whether the problem is tractable.
+\end{abstract}
+
+\section{Introduction}
+Learned neural controllers produce a single trained parameter vector and treat its action predictions as
+exact. On familiar states the controller is accurate; on states outside its training distribution it is
+silently wrong, with no internal signal that anything has changed. For a controller driving a 7-DOF robot
+arm through pick-and-place trajectories, this is a safety concern: the robot will confidently execute a
+bad action rather than flag that it is operating outside its training regime.
+
+The Bayesian view replaces the single parameter vector with a posterior distribution and predicts by
+averaging over it. Familiar states produce tight action distributions; unfamiliar states produce
+spread-out ones. That spread is the missing signal---an internal sense of ``I am not sure here'' that a
+point-estimate controller cannot produce. Exact Bayesian inference in neural networks is intractable, so
+in practice one relies on sampling-based approximations whose quality depends entirely on the MCMC method
+behind them. This paper studies that dependence on a concrete controller, DNFC, taken from a prior
+research project: a neural feedback controller that encodes a target (cartesian coordinates plus a
+one-hot phase indicator) into a latent of the same shape as the robot state, subtracts the current state,
+and passes the difference through a controller MLP that outputs $\tanh$-bounded joint velocities. We place
+a Gaussian prior on the controller's final linear layer and compare two samplers head-to-head on the
+resulting posterior: classical gradient-free RWMH and gradient-aware SGLD.
+
+\textbf{Research question.} \emph{For Bayesian inference over the last layer of the DNFC controller, how do
+RWMH and SGLD compare in terms of (i) mixing and effective sample size per unit of compute, and (ii) the
+quality of the predictive uncertainty they produce on in-distribution, out-of-distribution
+(extrapolation-split), and target-perturbed states?}
+
+\textbf{Contributions.}
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt]
+  \item A frozen-trunk Bayesian last-layer wrapper for a trained feedback controller, verified to
+  reproduce the deterministic model exactly and to admit a correct tempered, subsampled log-posterior and
+  gradient (Sec.~\ref{sec:foundation}).
+  \item A rigorous RWMH-vs-SGLD comparison with split-$\hat R$/ESS diagnostics, three efficiency metrics
+  that separate algorithm from hardware, and a closed-form Gaussian reference posterior, all averaged over
+  five independently trained controllers (Secs.~\ref{sec:rwmh}--\ref{sec:uncertainty}).
+  \item The empirical findings that (a) gradient information is necessary in this regime---RWMH is
+  dimension-limited while SGLD is dimension-independent and $\sim\!33\times$ more compute-efficient;
+  (b) \emph{conditioning} ($\sigma_a$), not the sampler, governs feasibility, and tempering does not help;
+  and (c) last-layer MCMC yields a usable distribution-shift signal that SGLD recovers more faithfully
+  than RWMH, while the dataset's nominal extrapolation split is not a genuine shift.
+\end{itemize}
+
+\section{Method}\label{sec:method}
+
+\textbf{Model and Bayesian last layer.} DNFC encodes a target representation $g$ (9 cartesian coordinates
+plus a 4-dimensional one-hot phase) through an MLP encoder into a latent of the same shape as the robot
+state $s$, subtracts the state, and feeds the difference through a controller MLP that outputs
+$\tanh$-bounded joint velocities (7 DOF). We freeze the encoder and all but the final linear layer of the
+controller. Writing the frozen trunk's output as a feature $\phi(s,g)\in\mathbb{R}^{d}$, the action is
+\[
+f_\theta(s,g) = \tanh\!\big(W\,\phi(s,g) + b\big), \qquad \theta=(W,b)\in\mathbb{R}^{7(d+1)} .
+\]
+For the controller used here $d=384$, so the Bayesian parameter vector is
+$\theta\in\mathbb{R}^{2695}$. Because the trunk is frozen, $\phi(s,g)$ is constant and is precomputed once
+per state, making the posterior a cheap function of $\theta$ alone.
+
+\textbf{Prior, likelihood, posterior.} A Gaussian prior $p(\theta)=\mathcal{N}(0,\alpha^2 I)$ is placed on
+the last-layer weights, with $\alpha$ set to the empirical standard deviation of the trained weights
+($\alpha\approx0.063$). The likelihood is Gaussian over actions with fixed observation noise $\sigma_a$,
+\[
+p(D\mid\theta)=\prod_{i=1}^{N'}\mathcal{N}\!\big(a_i \,\big|\, f_\theta(s_i,g_i),\;\sigma_a^2 I_7\big),
+\qquad
+p(\theta\mid D)\;\propto\;p(D\mid\theta)\,p(\theta),
+\]
+where $(s_i,g_i,a_i)$ is a (state, target, expert-action) triple from the DNFC dataset. Two controls keep
+mixing feasible and are held identical across samplers: a tempered posterior $p(\theta\mid D)^{1/T}$ and
+subsampling to a fixed subset of $N'$ training triples. We report $T$ and $N'$ up front
+(Table~\ref{tab:setup}). \emph{Note on tempering.} Under $p(\theta\mid D)^{1/T}$ it is $T>1$ that flattens
+the posterior; we use $T=1$ (untempered), because we find empirically (Sec.~\ref{sec:discussion}) that
+tempering rescales posterior \emph{width} uniformly and therefore leaves the \emph{conditioning} that
+governs mixing unchanged.
+
+The single most consequential quantity is the posterior \emph{condition number}. Under a Gaussian
+(Laplace) approximation it is
+\[
+\kappa \;=\; 1 + \frac{\alpha^2}{\sigma_a^2}\,\lambda_{\max}(\Phi^\top\Phi),
+\]
+where $\Phi$ is the matrix of precomputed features over the $N'$ subset. The feature Gram $\Phi^\top\Phi$
+has \emph{effective rank} $\approx 3.6$ (the controller's input ``diff'' is only $14$-dimensional), so the
+likelihood pins down a tiny subspace tightly and leaves the remaining $\sim\!2690$ directions to the
+prior. This near-degeneracy is the source of the ill-conditioning that dominates our results.
+
+\textbf{Samplers.} Both target the same posterior under the same $T$ and $N'$.
+\emph{RWMH (gradient-free baseline)} uses isotropic Gaussian proposals
+$\theta'=\theta+\tau\xi$, $\xi\sim\mathcal{N}(0,I)$, with $\tau$ tuned during burn-in (Robbins--Monro on
+$\log\tau$) to the high-dimensional benchmark acceptance rate $\approx 23.4\%$.
+\emph{SGLD (gradient-aware, primary)} uses minibatches of $B$ triples,
+\[
+\theta_{k+1}=\theta_k+\tfrac{\tau_k}{2}\Big(\tfrac{N'}{B}\!\!\sum_{i\in\mathcal{B}_k}\!\nabla_\theta\log
+p(a_i\mid s_i,g_i,\theta)+\nabla_\theta\log p(\theta)\Big)+\sqrt{\tau_k}\,\xi_k,
+\]
+with the decreasing schedule $\tau_k\propto k^{-0.55}$ (floored to give a stationary sampling tail). We
+implement the minibatch drift in closed form (no autograd graph) for speed.
+
+\textbf{Analytic reference posterior.} Since the actions are small ($\sim\!10^{-2}$), $\tanh$ is
+effectively the identity over their range, so each output dimension is a Bayesian linear regression on
+the shared features and the posterior is a product of Gaussians with a single shared $385\times385$
+covariance. This closed-form posterior is sampled i.i.d.\ and serves as an \emph{exact reference}: it
+separates ``does the posterior encode a signal'' from ``did the sampler capture it.''
+
+\textbf{Diagnostics.} For each sampler we run four chains from dispersed initial points and report
+split-$\hat R$, ESS (Geyer initial-monotone estimator), and autocorrelation, with acceptance/step-size
+trajectories. Because this small last layer is kernel-overhead-bound on a GPU (so minibatching buys no
+wall-clock there), we report efficiency three ways to separate algorithm from hardware: ESS per
+iteration, ESS per $10^6$ likelihood-term evaluations (the platform-independent ``per unit compute''
+metric: RWMH touches $N'$ terms per step, SGLD touches $B$), and ESS per second of wall-clock.
+
+\textbf{Predictive uncertainty.} From posterior samples $\{\theta^{(m)}\}_{m=1}^M$ we form the
+Monte-Carlo predictive mean and spread,
+\[
+\bar\mu(s,g)=\tfrac1M\sum_m f_{\theta^{(m)}}(s,g),\qquad
+\bar\sigma(s,g)^2=\tfrac1M\sum_m\big\|f_{\theta^{(m)}}(s,g)-\bar\mu(s,g)\big\|^2 .
+\]
+We evaluate three input regimes from the existing dataset: \emph{in-distribution} (interpolation split),
+\emph{extrapolation} (extrapolation split), and \emph{target-perturbed} (in-distribution states with
+Gaussian noise added to the target cartesian coordinates at several levels). We report action MSE against
+the expert action, predictive-std distributions, extrapolation-detection AUROC (predictive std as the
+score), and std-vs-error calibration, for the point estimate, the analytic reference, and the RWMH and
+SGLD samples.
+
+\textbf{Experimental setup.} Table~\ref{tab:setup} lists the configuration. To guard against
+seed-specific flukes, all efficiency and uncertainty numbers are reported as mean~$\pm$~std across
+\emph{five independently trained controllers} (different initialization seeds; identical architecture).
+Runs use a single GPU; ESS estimates derive from four chains of thinned post-burn-in draws.
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+quantity & value & note \\
+\midrule
+Bayesian dimension $\theta$ & $2695$ & $d=384$ \\
+prior scale $\alpha$ & $\approx 0.063$ & $=$ std of trained weights ($0.060$--$0.068$ across seeds) \\
+observation noise $\sigma_a$ & $0.05$ & primary; train-residual $0.00127$ is too stiff (see below) \\
+condition number $\kappa$ & $\approx 4\times10^{3}$ & vs $6.5\times10^{6}$ at the train-residual $\sigma_a$ \\
+feature eff.\ rank & $\approx 3.6$ & $\lambda_{\max}(\Phi^\top\Phi)\approx 2.7\times10^{3}$ \\
+subset / minibatch & $N'=4096$, $B=128$ & subset drawn from the train split \\
+temperature & $T=1$ & untempered (tempering does not aid mixing) \\
+chains / seeds & $4$ / $5$ & dispersed inits; non-AMC model, seeds $0$--$4$ \\
+\bottomrule
+\end{tabular}
+\caption{Configuration. $\sigma_a$ sets the posterior conditioning $\kappa$ and is the key modelling knob.}
+\label{tab:setup}
+\end{table}
+
+\section{Results}
+
+\subsection{Foundation: the wrapper is exact and the posterior is correct}\label{sec:foundation}
+The decomposed (frozen-trunk + Bayesian-head) forward pass reproduces the original monolithic controller
+\emph{exactly} (maximum action difference $0$ in float32), and the trained point estimate explains the
+training actions with $R^2=0.99$ on the $N'$ subset. The analytic log-posterior gradient matches central
+finite differences to $\sim\!10^{-7}$, and the SGLD minibatch gradient (with the $N'/B$ rescaling) is an
+unbiased estimator of the full-data gradient. These checks confirm that subsequent mixing behaviour
+reflects the samplers, not implementation error.
+
+\subsection{RWMH: correctly tuned, but defeated by dimension}\label{sec:rwmh}
+RWMH adapts cleanly to the $23.4\%$ benchmark acceptance, yet the chains do not mix: on the (stiffest,
+train-residual-$\sigma_a$) posterior the log-posterior split-$\hat R$ is $2.11$ with $\mathrm{ESS}=5.2$
+from $8000$ draws, the per-coordinate $\hat R$ has median $6.2$ (max $20.4$), and \emph{no} coordinate
+reaches $\hat R<1.1$. This is not an implementation defect: on isotropic Gaussians the sampler recovers
+the target's mean and variance, and its ESS falls as $1/d$ (Table~\ref{tab:dimscale})---the classical
+random-walk curse of dimension. The cause on the real posterior is anisotropy: the rank-$\approx\!3.6$
+feature Gram yields a Gaussian-approximation condition number $\kappa\approx6.5\times10^{6}$, so isotropic
+proposals limited by the steep directions cannot traverse the broad ones. Figure~\ref{fig:rwmh} shows the
+traces, the adapted step size, and the flat autocorrelation.
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+isotropic dimension $d$ & $100$ & $1000$ & $2695$ \\
+\midrule
+RWMH ESS (coordinate $0$) & $240$ & $13$ & $11$ \\
+SGLD ESS (coordinate $0$) & $4221$ & $4775$ & $4554$ \\
+\bottomrule
+\end{tabular}
+\caption{Mixing vs.\ dimension on isotropic Gaussian targets (same number of draws). RWMH degrades as
+$1/d$; SGLD is essentially dimension-independent. This contrast is the mechanism behind every result below.}
+\label{tab:dimscale}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.96\textwidth]{rwmh/T1_N40000_C4/diagnostics.png}
+\caption{RWMH diagnostics on the last-layer posterior: log-posterior and parameter traces, the
+step-size adapted to $23.4\%$ acceptance, running acceptance, and the autocorrelation. The chains are
+well tuned but do not mix.}
+\label{fig:rwmh}
+\end{figure}
+
+\subsection{SGLD: gradient information pays off where it matters}\label{sec:sgld}
+On isotropic targets SGLD mixes \emph{dimension-independently}---$\mathrm{ESS}\approx4554$ at $d=2695$
+versus RWMH's $11$ (Table~\ref{tab:dimscale}), a $\sim\!400\times$ gap---because the gradient avoids the
+random-walk slowdown. On the actual ill-conditioned posterior both samplers are limited by $\kappa$, so
+\emph{per-iteration} mixing is comparable; SGLD's advantage is \emph{compute}, since it touches $B=128$
+versus RWMH's $N'=4096$ likelihood terms per step (Table~\ref{tab:efficiency},
+Fig.~\ref{fig:efficiency}). Averaged over five seeds, SGLD is $32.9\times\!\pm\!15.4$ more efficient per
+unit of compute, and the per-seed ratio exceeds one on every seed ($9.3$--$56\times$). The wall-clock
+caveat is honest: on this small last layer the GPU is kernel-overhead-bound, so RWMH's full-batch step is
+as cheap as SGLD's minibatch ($0.14$ vs $0.15$\,ms) and RWMH is marginally ahead in ESS/second; on a CPU
+(FLOP-bound) SGLD's step is $2.3\times$ cheaper, so the minibatch advantage is real and simply does not
+surface in GPU wall-clock at this scale. A single-model sweep over $\sigma_a$ confirms SGLD's
+per-compute lead is stable across conditioning ($27$--$95\times$).
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+efficiency metric (log-posterior) & RWMH & SGLD & SGLD/RWMH \\
+\midrule
+ESS / iteration & $(3.2\pm1.5)\times10^{-4}$ & $(2.7\pm0.8)\times10^{-4}$ & $\approx 1$ \\
+\textbf{ESS / $10^{6}$ term-evals} & $0.078\pm0.037$ & $2.11\pm0.63$ & $\mathbf{32.9\times\!\pm\!15.4}$ \\
+ESS / second (GPU) & $2.26\pm1.1$ & $1.75\pm0.52$ & $0.8$ (overhead-bound) \\
+\bottomrule
+\end{tabular}
+\caption{Sampler efficiency at $\sigma_a=0.05$, mean~$\pm$~std over 5 seeds. Per-iteration mixing is
+comparable (both $\kappa$-limited); SGLD's edge is per unit compute.}
+\label{tab:efficiency}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.92\textwidth]{multiseed/multiseed_efficiency.png}
+\caption{RWMH vs.\ SGLD efficiency across five trained seeds. Left: log-posterior ESS per $10^6$
+term-evaluations (per-seed points; bars are mean~$\pm$~std). Right: the per-seed SGLD/RWMH compute-
+efficiency ratio, above parity for every seed.}
+\label{fig:efficiency}
+\end{figure}
+
+\subsection{Predictive uncertainty}\label{sec:uncertainty}
+\textbf{Genuine input shift is detected, and SGLD recovers it best.} Perturbing the target coordinates
+raises the predictive std monotonically, and the sampler ordering is analytic $\gtrsim$ SGLD $>$ RWMH at
+every level and on every seed (Table~\ref{tab:uncertainty}, Fig.~\ref{fig:uncertainty}). RWMH
+systematically under-estimates the spread---its poor mixing shrinks the apparent variance---while SGLD
+tracks the exact analytic posterior closely. This is the project's positive result: last-layer MCMC
+produces a usable distribution-shift signal, and the gradient-aware sampler reproduces it far more
+faithfully.
+
+\textbf{The nominal extrapolation split is not out-of-distribution.} Action error does not rise on the
+``extrapolation'' split (MSE ratio extrap/interp $=0.84\pm0.04$), and predictive std fails to separate it
+from in-distribution states---detection AUROC $\approx0.5$ \emph{even for the exact analytic posterior}
+($0.460\pm0.010$; Table~\ref{tab:uncertainty}). This is a correct null, not a method failure: $0.0\%$ of
+the extrapolation split's target coordinates fall outside the training range (interpolation itself is
+$18.2\%$ outside), and feature-space $z$-scores against training are identical ($0.60$ vs $0.61$). The
+frozen encoder maps these inputs on-manifold, the controller generalizes, and the uncertainty correctly
+reports ``not more uncertain.'' We therefore use the controlled target-perturbation experiment as the
+distribution-shift demonstration and report the extrapolation-split null transparently.
+
+\begin{table}[h]
+\centering\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+method & median in-dist.\ std & extrap.\ AUROC & perturb.\ std @ $0.2$\,m \\
+\midrule
+analytic (exact reference) & $0.0186$ & $0.460\pm0.010$ & $0.0927\pm0.0089$ \\
+SGLD & $0.0167$ & $0.457\pm0.046$ & $0.0834\pm0.0104$ \\
+RWMH & $0.0147$ & $0.475\pm0.034$ & $0.0584\pm0.0056$ \\
+point estimate & $0$ & $0.5$ (no spread) & $0$ \\
+\bottomrule
+\end{tabular}
+\caption{Predictive uncertainty, mean~$\pm$~std over 5 seeds. AUROC $\approx0.5$ everywhere (the extrap
+split is not OOD), but predictive std rises with genuine perturbation, with SGLD closest to the exact
+reference. Point-estimate action MSE extrap/interp $=0.84\pm0.04$ ($\approx1$: extrap no harder).}
+\label{tab:uncertainty}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.92\textwidth]{multiseed/multiseed_uncertainty.png}
+\caption{Predictive uncertainty across five seeds. Left: predictive std vs.\ target-perturbation level
+(mean $\pm$ std bands); the rise is monotonic and SGLD tracks the exact analytic posterior while RWMH
+lags. Right: extrapolation-detection AUROC per seed, at chance for all methods including the exact
+reference---the nominal extrapolation split is not a genuine shift.}
+\label{fig:uncertainty}
+\end{figure}
+
+\section{Discussion}\label{sec:discussion}
+\textbf{Gradient information is necessary in this regime.} The $1/d$ scaling of RWMH versus the
+dimension-independent mixing of SGLD (Table~\ref{tab:dimscale}) is the root cause of every downstream
+difference. At $\theta\in\mathbb{R}^{2695}$ a gradient-free random walk simply cannot explore the
+posterior, whereas SGLD can---and does so while touching far less data per step.
+
+\textbf{Conditioning, not the sampler, governs feasibility.} The observation noise $\sigma_a$ sets
+$\kappa=1+(\alpha^2/\sigma_a^2)\lambda_{\max}(\Phi^\top\Phi)$. At the ``data-driven'' train-residual
+$\sigma_a=0.00127$ the posterior is a needle ($\kappa\approx6.5\times10^{6}$) that neither sampler can
+explore \emph{and} whose predictive spread is near zero---useless as an uncertainty signal. A deliberate
+$\sigma_a=0.05$ ($\kappa\approx4\times10^{3}$) restores both samplability and a meaningful signal.
+Crucially, \emph{tempering does not substitute for this}: $p(\theta\mid D)^{1/T}$ rescales every posterior
+direction by the same factor, leaving $\kappa$---and hence mixing---unchanged (we verified $T{=}100$
+mixes no better than $T{=}1$). The lever that matters is the likelihood precision relative to the prior,
+i.e.\ $\sigma_a$.
+
+\textbf{SGLD is the better tool for last-layer predictive uncertainty.} Beyond raw efficiency, SGLD's
+samples reproduce the exact posterior's spread and its response to perturbation, whereas RWMH's poor
+mixing makes it under-report uncertainty---a failure mode that is invisible without a reference but
+directly harmful for a safety signal. The closed-form analytic posterior was essential precisely because
+it disentangles the posterior's content from the sampler's fidelity.
+
+\textbf{On the research question.} The outcome is the ``interesting trade-off'' the question anticipated:
+SGLD dominates on dimension scaling and per-unit-compute efficiency and on uncertainty fidelity, while the
+two are comparable per iteration and (on this small problem) in GPU wall-clock. And the uncertainty study
+yields a usable extrapolation signal only under genuine shift; the dataset's labelled extrapolation split
+is not one---a caveat that is itself a useful, honest finding about evaluating learned controllers.
+
+\section{Limitations and Future Work}
+$\sigma_a=0.05$ is a reported modelling choice rather than a learned quantity; its effect on conditioning
+is mapped by a single-model sweep but not propagated through the uncertainty experiments. The MCMC ESS is
+small in absolute terms (tens of effective samples), so the RWMH/SGLD predictive stds carry estimator
+noise; the analytic reference is the reliable ground truth here. Finally, the absence of a genuine
+out-of-hull extrapolation split prevented a true OOD-detection AUROC; constructing such a split (target
+positions outside the training convex hull), propagating $\sigma_a$ sensitivity through the predictive
+metrics, and running a closed-loop uncertainty rollout in simulation are natural next steps.
+
+\section{Conclusion}
+We made the last layer of a trained neural feedback controller Bayesian and showed how the choice of MCMC
+sampler shapes the resulting uncertainty. A well-tuned gradient-free random walk is correct but
+dimension-limited and mixes poorly at $\theta\in\mathbb{R}^{2695}$; gradient-aware SGLD mixes
+dimension-independently, is $\sim\!33\times$ more efficient per unit of compute (robust across five
+trained seeds), and recovers the exact posterior's predictive uncertainty far more faithfully. Whether
+the problem is tractable at all is decided by posterior conditioning---set by the observation-noise scale,
+not by tempering. The Bayesian last layer does provide a usable ``I am not sure here'' signal under
+genuine input shift; the dataset's nominal extrapolation split simply is not such a shift. For equipping a
+point-estimate controller with calibrated uncertainty, gradient-aware sampling is the better tool, and the
+modelling of the likelihood precision is as important as the sampler itself.
+
+\section*{Reproducibility}
+All experiments are reproducible with the \texttt{bayes/} package (see \texttt{bayes/README.md} and
+\texttt{bayes/RESULTS.md}): \texttt{verify\_week1} (foundation), \texttt{run\_rwmh}, \texttt{run\_sgld},
+\texttt{run\_week4} (predictive uncertainty), and \texttt{run\_multiseed} (the five-seed aggregation that
+produces Tables~\ref{tab:efficiency}--\ref{tab:uncertainty} and Figs.~\ref{fig:efficiency}--\ref{fig:uncertainty}).
+
+\end{document}

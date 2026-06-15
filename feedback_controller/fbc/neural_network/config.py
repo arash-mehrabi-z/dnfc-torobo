@@ -5,13 +5,13 @@ class Config:
         self.num_steps = 299
         self.C = 1e-5
 
-        self.v_name = "2+2l_lat:sub-nvel" #"6l_linear" #"v_custl_mse"
+        self.v_name = "2+2l_lat:sub-nvel+AMC" #"6l_linear" #"v_custl_mse"
         self.v_name_base = "3l_base" #"4l_base" 
 
         self.episodes_num_ds = 72 #500 #360 #2000
         self.dataset_name = f"trajs:{self.episodes_num_ds}_blocks:3" +\
             "_triangle_v_scarce" #"_random"
-        self.ds_ratio = "extrap_0.85" #"interp_0.95" #"interp_0.85" #0.263
+        self.ds_ratio = "interp_0.85" #"interp_0.95" #"extrap_0.85" #0.263
         self.ds_file_name = f'train_{self.ds_ratio}.npy'
         self.ds_ratio_test = self.ds_ratio #"interp_0.85"
         self.ds_test_file = f'test_{self.ds_ratio_test}.npy'

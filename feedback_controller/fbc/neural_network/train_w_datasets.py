@@ -264,7 +264,7 @@ num_epochs = 5000 + 1
 batch_size = 128
 learning_rate = 3e-4
 validation_interval = 100
-num_trains = 10
+num_trains = 1 #10
 noise_std = 0.004
 
 if use_baseline:
@@ -275,7 +275,7 @@ for i in range(7):
     train_info[f'mae_joint_{i+1}_val'] = []
     train_info[f'mae_joint_{i+1}_train'] = []
 
-for model_complexity in ['low', 'medium', 'high', 'xhigh']:
+for model_complexity in ['medium']: #['low', 'medium', 'high', 'xhigh']:
     enc_hid, cont_hid, lin_hid, lin_out = config.get_model_dims(model_complexity)
     
     for i_train in range(num_trains):

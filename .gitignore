@@ -19,5 +19,5 @@ erhtor3_store/*
 erhtor3_work/*
 geo_touch/*
 torobo_robot/*
-
+feedback_controller/fbc/neural_network/bayes/results/*
 

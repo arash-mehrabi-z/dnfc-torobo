@@ -314,9 +314,9 @@ kin = TorKin()
 
 use_only_dnfc = False
 epoch_no = 4000 #4000
-train_num = 10
+train_num = 1 #10
 
-for model_complexity in ['low', 'medium', 'high', 'xhigh']: #['medium']:
+for model_complexity in ['medium']: #['low', 'medium', 'high', 'xhigh']:
     # enc_hid, cont_hid, lin_hid, lin_out = config.get_model_dims(model_complexity)
     tester.load_model(0, 0, config.use_custom_loss, model_complexity)
     params_num = tester.config.get_params_num(tester.model)
