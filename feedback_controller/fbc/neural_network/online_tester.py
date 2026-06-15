@@ -342,8 +342,8 @@ def online_test(tester:Tester, eps_num, use_baseline):
                 latent_reps.append(x_des.tolist())
 
         velocities_tensor = torch.squeeze(velocities_tensor, 0)
-        # Denormalize actions to get real velocities
-        velocities_real = velocities_tensor * action_std
+        # Denormalize actions to get real velocities (skip if trained on raw actions)
+        velocities_real = velocities_tensor if config.raw_actions else velocities_tensor * action_std
         # Update real joint positions
         state_real[:7] += (1 * velocities_real)
 
@@ -526,8 +526,8 @@ def online_test_image(tester: Tester, eps_num, target_image_capture,
         all_x_encoded.append(x_encoded_squeezed.tolist())
 
         velocities_tensor = torch.squeeze(velocities_tensor, 0)
-        # Denormalize actions to get real velocities
-        velocities_real = velocities_tensor * action_std
+        # Denormalize actions to get real velocities (skip if trained on raw actions)
+        velocities_real = velocities_tensor if config.raw_actions else velocities_tensor * action_std
         # Update real joint positions
         state_real[:7] += (5 * velocities_real) #AMZ?
 
@@ -743,7 +743,9 @@ def online_test_two_stream(tester: Tester, eps_num, results_dir=None, save_every
 
         velocities_tensor = torch.squeeze(velocities_tensor, 0)
         # Denormalize actions: action_real = action_predicted * action_std
-        velocities_tensor = velocities_tensor * action_std
+        # (skip if trained on raw actions)
+        if not config.raw_actions:
+            velocities_tensor = velocities_tensor * action_std
         state[:7] += (5 * velocities_tensor)
 
         comm.create_and_pub_msg(state[:7])

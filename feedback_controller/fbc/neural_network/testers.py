@@ -352,8 +352,11 @@ class Tester():
                     velocities_tensor, x_des, _ = self.model(goal_nn, state_nn, touch_history)
 
             velocities_tensor = torch.squeeze(velocities_tensor, 0)
-            # Denormalize velocities
-            velocities_real = velocities_tensor * self.action_std
+            # Denormalize velocities (skip when the model was trained on raw actions)
+            if self.config.raw_actions:
+                velocities_real = velocities_tensor
+            else:
+                velocities_real = velocities_tensor * self.action_std
 
             # Update real state
             state_real[:7] += velocities_real

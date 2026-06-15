@@ -35,7 +35,7 @@ class TrajectoryDataset(Dataset):
                  joint_dim, use_image=False,
                  coords_dim=6, onehot_dim=4, ee_pose_dim=7,
                  image_size=(128, 128), traj_indices=None,
-                 crop_params=None):
+                 crop_params=None, raw_actions=False):
         """
         Args:
             ds_root_dir: Root directory containing data files and images
@@ -58,6 +58,15 @@ class TrajectoryDataset(Dataset):
         self.target_dim = coords_dim + onehot_dim
         self.ds_root_dir = ds_root_dir
         self.use_image = use_image
+        self.raw_actions = raw_actions
+
+        # When training on raw actions, undo the acts/action_std normalization
+        # that was baked into the .npy by multiplying back by action_std.
+        if self.raw_actions:
+            norm_params_path = os.path.join(ds_root_dir, 'normalization_params.npz')
+            norm_params = np.load(norm_params_path)
+            self.action_std = norm_params['action_std'].flatten()  # (joint_dim,)
+            print("raw_actions=True: de-normalizing actions with action_std", self.action_std)
 
         data_file_path = os.path.join(ds_root_dir, file_name)
         self.trajectories = np.load(data_file_path)
@@ -106,6 +115,8 @@ class TrajectoryDataset(Dataset):
         state = self.trajectories[traj_no, step_no, 1:1+self.state_dim]
 
         action = self.trajectories[traj_no, step_no, -self.joint_dim:]
+        if self.raw_actions:
+            action = action * self.action_std
 
         if self.use_image:
             # Get original trajectory folder number
@@ -522,12 +533,14 @@ for model_complexity in ['high']: #'low', 'medium', 'high', 'xhigh']:
                                         ee_pose_dim=config.ee_pose_dim,
                                         image_size=config.image_size,
                                         traj_indices=train_traj_indices,
-                                        crop_params=crop_params)
+                                        crop_params=crop_params,
+                                        raw_actions=config.raw_actions)
         else:
             dataset = TrajectoryDataset(ds_root_dir, ds_file_name,
                                         joints_num, use_image=False,
                                         coords_dim=config.coords_dim,
-                                        onehot_dim=config.onehot_dim)
+                                        onehot_dim=config.onehot_dim,
+                                        raw_actions=config.raw_actions)
         # if use_two_stream or use_image:
         #     train_set, val_set = torch.utils.data.random_split(dataset, [0.9, 0.1])
         # else:

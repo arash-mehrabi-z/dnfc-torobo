@@ -5,7 +5,13 @@ class Config:
         self.num_steps = 299
         self.C = 1e-5
 
-        self.v_name = "img_task_enc_rob_enc" #"cart_task_enc_conc" #"2+2l_lat:sub-nvel"
+        # If True, train/eval on raw (un-normalized) actions: the dataset
+        # multiplies the stored normalized actions back by action_std, and the
+        # testers skip the matching de-normalization. See TrajectoryDataset and
+        # the `* action_std` sites in testers.py / online_tester.py.
+        self.raw_actions = True
+
+        self.v_name = "img_task_enc_rob_enc_raw_action" #"cart_task_enc_conc" #"2+2l_lat:sub-nvel"
         self.v_name_base = "3l_base" #"4l_base"
         self.v_name_two_stream = "two_stream_two_encs_concat_latent"
         self.num_history_images = 3
