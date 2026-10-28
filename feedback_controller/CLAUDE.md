@@ -12,17 +12,18 @@ The repo lives under a `catkin_ws`, but there is **no ROS package here** (no `pa
 
 There is no build system, no test runner, no linter, and no `requirements.txt` (the `readme.odt` references a nonexistent `requirements.py`). "Tests" are rollout/evaluation scripts. Two separate Python runtimes are involved:
 
-- **Offline (training, emulation, analysis):** the bundled `fbc/neural_network/.venv` (Python 3.9; torch, torchvision, sklearn, `dtw`, gymnasium). This venv was created on macOS — several scripts contain hardcoded absolute paths from other machines (`/Users/denizakkoc/...`, `/home/deniz/...`, `/home/erhan/...`) that must be edited for the data/IK-table files to load.
+- **Offline (training, emulation, analysis):** the conda env **`dnfc2`**, called by full path: `/home/arash/anaconda3/envs/dnfc2/bin/python` (Python 3.9, torch 2.5.1 + CUDA, sklearn, `dtw`, matplotlib, scipy). `conda activate` does not take effect in non-interactive shells, so don't rely on it. Do **not** use the bundled `fbc/neural_network/.venv`: it was built on macOS and its `python3` symlinks to `/Library/Developer/...`, which doesn't exist here. System `python3` is 3.6.9 and is too old. `dnfc2` has no `gymnasium`, so `test_w_nn.py` won't run in it as-is. Several scripts also contain hardcoded absolute paths from other machines (`/Users/denizakkoc/...`, `/home/deniz/...`, `/home/erhan/...`) that must be edited for the data/IK-table files to load.
 - **Online (real/simulated robot):** the **system ROS** Python — `online_tester.py` and `udp_comm.py` do `import rospy` and `from torobo_msgs.msg import ...`, and need a running ROS master plus a Torobo control server reachable over UDP at `localhost:50000`.
 
 ```bash
 cd fbc/neural_network            # required working dir for everything below
+PY=/home/arash/anaconda3/envs/dnfc2/bin/python
 
-python3 train_w_datasets.py      # train Torobo DNFC/baseline (offline venv)
-python3 emulated_test.py         # offline rollout via FK only, cartesian success + plots (no ROS)
-python3 online_tester.py         # online rollout on Torobo, DTW vs ground truth (needs ROS + UDP server)
-python3 test_w_nn.py             # standalone 2-DOF Reacher-v4 experiment (gymnasium/MuJoCo)
-python3 torkin.py                # smoke-test the kinematics (standalone IK demo)
+$PY train_w_datasets.py          # train Torobo DNFC/baseline
+$PY emulated_test.py             # offline rollout via FK only, cartesian success + plots (no ROS)
+python3 online_tester.py         # online rollout on Torobo, DTW vs ground truth (ROS python; needs ROS + UDP server)
+python test_w_nn.py              # standalone 2-DOF Reacher-v4 experiment (needs gymnasium/MuJoCo; not in dnfc2)
+$PY torkin.py                    # smoke-test the kinematics (standalone IK demo)
 ```
 
 Selecting *which* model/dataset to train or test is done by **editing `config.py`** and the script-top flags (e.g. `use_baseline`, `use_custom_loss`, `epoch_no`), not via CLI args. `train_w_datasets.py` refuses to start if the target weights directory already exists (delete it to retrain). Data `.npy` files and `.pt` train/val splits are produced by the notebooks (`preprocess_data_v2.ipynb`, `data.ipynb`) from raw trajectories; analysis/figures live in `get_results.ipynb`, `trajectory_visualization.ipynb`, `inspection.ipynb`.
@@ -49,6 +50,22 @@ where `model_name` encodes loss type, target type, model variant, and parameter 
 **Kinematics** (`torkin.py` + `kinematics/`): `TorKin` wraps auto-generated forward-kinematics and Jacobian functions in `kinematics/generated_pycode/` (`FK_*`, `Jpos/Jzaxis/Jyaxis_*`), which were themselves generated from the MATLAB symbolic scripts (`sym_*kin.m`, `gen_*code_py.m`). `forwardkin(bodypartix, q)` returns `(p, R)`; `q` is padded to 10 = torso(2) + arm(7) + gripper(1). Bodypart indices come from `global_defines.TOR` (`_TORSO=0, _RARM=1, _LARM=3, _HEAD=5`); the arm experiments use `_RARM=1`. Iterative IK (`_IKwZAXIS` batch, `_IIKwZAXIS` teleop) solves position + Z/Y-axis orientation and optionally seeds from KD-tree IK tables — those table files are hardcoded under `/home/erhan/...` and, if absent, IK silently falls back to a default seed. Note `torkin.py` does `import roslibpy as rospy` (the WebSocket client `roslibpy`, **not** ROS `rospy`) and only uses it for `rospy.sleep`.
 
 **Communication** (`udp_comm.py`): `Comm` subscribes to the Torobo joint-state ROS topic and sends `setq`/`move_point` text commands to the control server over UDP. Used only by `online_tester.py`.
+
+## `bayes/` — Bayesian last-layer side study
+
+`fbc/neural_network/bayes/` is a separate package (as of 2026-10, untracked in git). It compares **RWMH** and **SGLD** MCMC for a Bayesian posterior over only the final controller layer (`mlp_controller.linear.2`) of a trained, frozen `GeneralModel`. Unlike the flat legacy scripts, it is a real package with argparse CLIs, and is run **as modules** from `fbc/neural_network/`:
+
+```bash
+$PY -m bayes.verify_week1                     # foundation checks (all should PASS)
+$PY -m bayes.diagnostics                      # self-test R-hat / ESS
+$PY -m bayes.run_sgld --sigma-a 0.05          # SGLD vs RWMH efficiency
+$PY -m bayes.run_multiseed --seeds 0 1 2 3 4  # cross-seed error bars
+```
+
+- The checkpoint is **not hardcoded**: `dnfc_bll.resolve_target()` rebuilds the weight path from `config.py` using the same `get_model_name` rule as `testers.py`, so editing `config.py` also changes which model this study wraps. Override `v_name`/`train_no` through `BLLConfig`, which edits a local `Config()` and leaves `config.py` alone.
+- `DNFCLastLayer.as_controller(theta)` returns a real `GeneralModel`, so you can drop a posterior sample straight into `online_tester.py`.
+- `sigma_a` controls both posterior width and conditioning. Its default, the training-residual value (~0.00127), is too stiff to sample, so the experiments use `--sigma-a 0.05`.
+- Outputs go to `bayes/results/<run>/`. `bayes/README.md` has the module map and `bayes/RESULTS.md` has the findings. Both mention `../main.tex`, but that file isn't in the tree.
 
 ## Conventions worth matching
 
