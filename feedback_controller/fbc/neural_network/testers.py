@@ -116,7 +116,7 @@ class Tester():
             # Load GeneralModel with image-based target representation
             cnn_latent, cont_hid, pose_enc_hid = self.config.get_image_model_dims(model_complexity)
             self.model = GeneralModel(
-                encoded_space_dim=self.state_size,
+                encoded_space_dim=self.config.encoded_space_dim,
                 target_dim=self.target_size + self.onehot_size,
                 action_dim=self.joint_size,
                 enc_hid=0,
@@ -577,7 +577,7 @@ class Tester():
         dist = np.linalg.norm(p1-p2)
         # print(p1, p2, dist)
         # if (self.criterion_mse(torch.tensor(p1), torch.tensor(p2))**0.5) <= 0.0001: 
-        if dist <= 0.02: #0.015: #
+        if dist <= 0.02: #0.015:
             return True
         return False
 

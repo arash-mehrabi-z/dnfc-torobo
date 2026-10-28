@@ -469,7 +469,7 @@ ds_file_name = config.ds_file_name
 
 # Model:
 joints_num = config.joints_num
-encoded_space_dim = config.state_dim
+encoded_space_dim = config.encoded_space_dim  # latent/diff width (was config.state_dim=14)
 target_dim = config.coords_dim + config.onehot_dim
 action_dim = joints_num
 
@@ -478,11 +478,14 @@ use_baseline = False
 use_image = True  # Set to True to use image at t=0 as target representation
 use_two_stream = False
 use_custom_loss = config.use_custom_loss
-num_epochs = 7000 + 1
+num_epochs = 5000 + 1
 batch_size = 256
 learning_rate = 3e-4
 validation_interval = 100
 num_trains = 3
+# Index of the first seed to train: 0 trains all seeds from scratch (use for a brand
+# new variant like lat4); raise it to skip seeds whose weights dir already exists.
+first_train = 0
 noise_std = 0.05 #0.004
 
 # Crop parameters for image preprocessing
@@ -509,7 +512,7 @@ for model_complexity in ['high']: #'low', 'medium', 'high', 'xhigh']:
         cnn_latent = None  # Not used when use_image=False
         pose_enc_hid = None
     
-    for i_train in range(num_trains):
+    for i_train in range(first_train, num_trains):
         fig_1 = plt.figure(figsize=(12.8, 9.6))
         fig_2 = plt.figure(figsize=(12.8, 9.6))
 

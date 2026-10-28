@@ -11,7 +11,22 @@ class Config:
         # the `* action_std` sites in testers.py / online_tester.py.
         self.raw_actions = True
 
-        self.v_name = "img_task_enc_rob_enc_raw_action" #"cart_task_enc_conc" #"2+2l_lat:sub-nvel"
+        # Latent (diff) dimensionality of the image GeneralModel to load/train.
+        # This single knob drives BOTH the architecture width (encoded_space_dim,
+        # below) and the checkpoint/results dir name (v_name) so the two can never
+        # drift apart and load a mismatched checkpoint.
+        #   14 -> original "lat14" variant   (img_task_enc_rob_enc_raw_action)
+        #    7 -> reduced  "lat7"  variant   (img_task_enc_rob_enc_raw_action_lat7)
+        #    4 -> reduced  "lat4"  variant   (img_task_enc_rob_enc_raw_action_lat4)
+        self.latent_dim = 4 #7 #14  # set to 7/4 to use a reduced-latent model
+
+        # 14 keeps the original (suffix-less) name; any other dim gets a _lat{N}
+        # suffix so each variant has its own checkpoint/results directory.
+        if self.latent_dim == 14:
+            self.v_name = "img_task_enc_rob_enc_raw_action"
+        else:
+            self.v_name = f"img_task_enc_rob_enc_raw_action_lat{self.latent_dim}"
+        # legacy variants: "img_task_enc_rob_enc" / "cart_task_enc_conc" / "2+2l_lat:sub-nvel"
         self.v_name_base = "3l_base" #"4l_base"
         self.v_name_two_stream = "two_stream_two_encs_concat_latent"
         self.num_history_images = 3
@@ -33,6 +48,15 @@ class Config:
         self.action_dim = self.joints_num
         self.onehot_dim = 4
         self.ee_pose_dim = 7  # 3 position + 4 quaternion
+
+        # Controller input width (x_des / x_encoded / diff in GeneralModel),
+        # driven by latent_dim above. Decoupled from state_dim: the dimensionality
+        # analysis (bayes/diff_dimensionality.py) found only ~4-7 effective diff
+        # directions drive the output, so the 14-D latent is over-provisioned.
+        # NOTE: the baseline/two-stream paths historically assume this equals
+        # state_dim (they concat the raw 14-D state with x_des); only flip the
+        # latent_dim knob above while training/testing the image GeneralModel.
+        self.encoded_space_dim = self.latent_dim
 
         # self.num_params = 24.085 #6.037 #36.117
         # self.num_params_base = 24.091 #6.039 #36.109

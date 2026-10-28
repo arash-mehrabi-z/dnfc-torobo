@@ -414,7 +414,7 @@ def online_test_image(tester: Tester, eps_num, target_image_capture,
     step_size = tester.step_size
     target_size = tester.target_size
     onehot_size = tester.onehot_size
-    traj_step_size = 300 #150 #900
+    traj_step_size = 300 #300 #900 #300 #150
 
     elem = tester.dataset[eps_num]
     # Initial state from dataset is NORMALIZED
@@ -537,11 +537,11 @@ def online_test_image(tester: Tester, eps_num, target_image_capture,
         # Wait longer on first two timesteps to ensure robot reaches position
         if i <= 2:
             # print("Sleeping", i)
-            # rospy.sleep(3.0)
+            # rospy.sleep(0.1)
             rospy.sleep(0.1)
         else:
+            # rospy.sleep(0.1)
             rospy.sleep(0.1)
-            # rospy.sleep(0.07)
         comm.jsLock.acquire()
         js_real = torch.tensor((list(comm.joint_state))).to(device).float()
         comm.jsLock.release()
@@ -1084,8 +1084,13 @@ kin = TorKin()
 use_only_dnfc = True
 use_two_stream = False  # Set to True to use TwoStreamBaseline with images
 use_image = True  # Set to True to use GeneralModel with image at t=0 as target
-epoch_no = 4400 #4000
-train_num = 1
+epoch_no = 5000 #4400 #5000
+train_num = 3
+# Which trained controller is tested is selected by config.latent_dim (e.g. 4/7/14);
+# it drives both the architecture (encoded_space_dim) and the checkpoint/results
+# path (v_name). To test another variant, set config.latent_dim and rerun.
+print(f"[online_tester] latent_dim={config.latent_dim}  v_name={config.v_name}  "
+      f"encoded_space_dim={config.encoded_space_dim}  epoch={epoch_no}")
 # Camera topics for front and side cameras
 image_topic_front = '/fixed_camera/image_raw'  # Front camera (head camera)
 image_topic_side = '/side_camera/image_raw'   # Side camera (adjust topic name as needed)
@@ -1104,7 +1109,7 @@ if use_image:
         params_num = tester.config.get_params_num(tester.model)
 
         results_file = f'results/{config.dataset_name}_{params_num}K_{config.ds_ratio}'
-        results_file += f'/ep:{epoch_no}/image_model_{config.v_name}'
+        results_file += f'/ep:{epoch_no}/image_model_{config.v_name}DT=0.1'
         results_dir = os.path.join(cur_file_dir_path, results_file)
         if os.path.exists(results_dir):
             raise Exception(f"Result dir. exists. Are you testing again? Result dir: {results_dir}")
@@ -1121,7 +1126,7 @@ if use_image:
         all_states_image_model = []
         all_latent_reps = []  # x_des
         all_x_encoded_eps = []  # x_encoded
-        for eps_num in range(len(tester.dataset)): #3): #
+        for eps_num in range(len(tester.dataset)): #(5, len(tester.dataset)):
             for i_train in range(train_num):
                 tester.load_model(i_train, epoch_no, config.use_custom_loss,
                                   model_complexity, use_image=True)
